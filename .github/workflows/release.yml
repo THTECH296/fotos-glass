@@ -40,7 +40,9 @@ jobs:
           $exe = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
           Copy-Item $exe.FullName "dist/Fotos-Glass-Setup-x64.exe"
           $hash = (Get-FileHash "dist/Fotos-Glass-Setup-x64.exe" -Algorithm SHA256).Hash.ToLower()
-          "$hash  Fotos-Glass-Setup-x64.exe" | Out-File -Encoding ascii dist/SHA256SUMS.txt
+          # quebra de linha 
+ (LF) para o sha256sum -c do Linux/macOS também funcionar
+          [IO.File]::WriteAllText("$PWD/dist/SHA256SUMS.txt", "$hash  Fotos-Glass-Setup-x64.exe`n")
           Get-Content dist/SHA256SUMS.txt
 
       - name: Atestado de origem
