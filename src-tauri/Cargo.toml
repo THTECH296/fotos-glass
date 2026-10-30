@@ -1,0 +1,47 @@
+[package]
+name = "fotos"
+version = "1.0.0"
+description = "Fotos: a biblioteca de fotos do iOS no Windows"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+kamadak-exif = "0.5"
+imagesize = "0.13"
+walkdir = "2"
+chrono = "0.4"
+jpeg-encoder = "0.6"
+trash = "5"
+winreg = "0.55"
+
+[dependencies.windows]
+version = "0.61"
+features = [
+  "Foundation",
+  "Security_Credentials_UI",
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
+  "Win32_UI_Shell_PropertiesSystem",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_Graphics_Gdi",
+  "Win32_Storage_EnhancedStorage",
+]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
