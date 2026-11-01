@@ -574,3 +574,68 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 .selecting .tile .badge { right: 32px; }
+
+/* ============ movimento do Liquid Glass (mesmo nível do app Email) ============ */
+:root { --spring-soft: cubic-bezier(.25, 1.15, .35, 1); }
+
+/* reflexo especular que segue o cursor sobre o vidro */
+.glass::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: -1;
+  background: radial-gradient(160px circle at var(--mx, 50%) var(--my, -40%), rgba(255, 255, 255, .38), transparent 70%);
+  opacity: 0; transition: opacity .35s;
+}
+.glass:hover::before { opacity: 1; }
+:root[data-theme="dark"] .glass::before { background: radial-gradient(160px circle at var(--mx, 50%) var(--my, -40%), rgba(255, 255, 255, .12), transparent 70%); }
+
+/* botões: aperto com mola */
+.gbtn { transition: transform .45s var(--spring), background .2s, color .2s; }
+.gbtn:active { transform: scale(.86); }
+.gbtn:focus-visible, .nav-item:focus-visible, .mi:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* grupos de botões: bolha de vidro que desliza entre eles e o grupo "amassa" ao clicar */
+.lg-group { position: relative; transition: transform .5s var(--spring); }
+.lg-group.squish { transform: scale(.97, .94); }
+.lg-group > .gbtn, .lg-group > .pb { position: relative; z-index: 1; }
+.lg-group > .gbtn:hover, .lg-group > .pb:hover { background: none; }
+.lg-group > .hov {
+  position: absolute; z-index: 0; left: 0; top: 0; width: 0; height: 0; border-radius: 999px; pointer-events: none;
+  background: var(--fill-2); opacity: 0;
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .18), inset 0 1px 0 rgba(255, 255, 255, .25);
+  transition: transform .5s var(--spring), width .4s var(--spring), height .4s var(--spring), opacity .25s;
+}
+.lg-group.hovering > .hov { opacity: 1; }
+.glass.dim .lg-group > .hov, .lg-group.glass.dim > .hov, .vbarwrap > .hov { background: rgba(255, 255, 255, .18); }
+
+/* barra lateral: a seleção é uma bolha que desliza com mola entre os itens */
+#nav.has-knob { position: relative; }
+.nav-knob {
+  position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 0; pointer-events: none; border-radius: 10px;
+  background: var(--fill-2); opacity: 0;
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .22), inset 0 1px 0 rgba(255, 255, 255, .28), 0 2px 8px rgba(0, 0, 0, .06);
+  transition: transform .55s var(--spring-soft), width .4s var(--spring-soft), height .4s var(--spring-soft), opacity .2s;
+}
+.nav-knob.on { opacity: 1; }
+#nav.has-knob .nav-item { position: relative; z-index: 1; }
+#nav.has-knob .nav-item.active { background: transparent; }
+#nav.has-knob .nav-item.active:hover { background: transparent; }
+.nav-item { transition: background .15s, transform .4s var(--spring); }
+.nav-item:active { transform: scale(.97); }
+
+/* telas entram com um leve deslize */
+.view-enter { animation: view-in .42s var(--ease) both; }
+@keyframes view-in { from { opacity: 0; transform: translateY(10px); } }
+
+/* menus: atalhos à direita, itens desligados apagados, abrem com mola a partir do botão */
+.menu .mi kbd { margin-left: auto; padding-left: 14px; font: 500 11.5px var(--font); color: var(--label-2); letter-spacing: .01em; }
+.menu .mi:hover kbd { color: color-mix(in srgb, #fff 75%, transparent); }
+.menu .mi[disabled] { opacity: .35 !important; pointer-events: none; }
+.menu { animation: menu-in .42s var(--spring); }
+
+/* folhas e alertas: saem encolhendo com a mesma mola com que entram */
+.sheet, .alert { transition: opacity .2s, transform .3s var(--ease); }
+
+@media (prefers-reduced-motion: reduce) {
+  .view-enter, .menu { animation: none; }
+  .nav-knob, .lg-group > .hov { transition: none; }
+}
+.menu .mi kbd ~ .ic { margin-left: 8px; }

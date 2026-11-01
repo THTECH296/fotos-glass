@@ -1,6 +1,7 @@
 // Menus, alertas, folhas e avisos em vidro líquido.
 
 import { h, icon } from './util.js';
+import './motion.js';
 
 let openMenu = null;
 
@@ -25,9 +26,8 @@ export function menu(items, at) {
       if (m.header) return h('div.mh', m.header);
       return h('button.mi' + (m.danger ? '.danger' : ''), {
         disabled: m.disabled,
-        style: m.disabled ? { opacity: .4 } : null,
         onclick: () => { closeMenu(); m.run?.(); },
-      }, m.tick !== undefined ? h('span.tick', m.tick ? '✓' : '') : null, h('span', m.label), m.icon ? icon(m.icon) : null);
+      }, m.tick !== undefined ? h('span.tick', m.tick ? '✓' : '') : null, h('span', m.label), m.kbd ? h('kbd', m.kbd) : null, m.icon ? icon(m.icon) : null);
     }));
   document.body.append(scrim, el);
   const r = el.getBoundingClientRect();
