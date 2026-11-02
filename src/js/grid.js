@@ -125,7 +125,7 @@ export class VGrid {
     t.dataset.i = i;
     this.place(t, i);
     const img = t.firstChild;
-    const src = thumbUrl(it, this.px, editV(it));
+    const src = thumbUrl(it, this.px, editV(it), !this.aspect);
     if (img.getAttribute('src') !== src) {
       img.classList.remove('ok');
       img.src = src;

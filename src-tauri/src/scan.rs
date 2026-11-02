@@ -16,11 +16,19 @@ use std::{
 };
 use tauri::{AppHandle, Emitter};
 
+/// Tudo o que o Fotos do Windows abre (com as extensões de imagem HEIF/AVIF/WebP/JPEG XL/RAW da Store).
+/// O que o navegador não decodifica sozinho passa pelo Shell do Windows (miniatura e versão grande).
 pub const PHOTO_EXT: &[&str] = &[
-    "jpg", "jpeg", "png", "heic", "heif", "webp", "gif", "bmp", "tif", "tiff", "avif", "jxl", "dng", "cr2",
-    "cr3", "nef", "arw", "raf", "orf", "rw2",
+    "jpg", "jpeg", "jpe", "jfif", "jfi", "jif", "png", "apng", "gif", "bmp", "dib", "rle", "tif",
+    "tiff", "heic", "heif", "hif", "avif", "webp", "jxr", "wdp", "hdp", "jxl", "ico", "dds", "dng",
+    "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "rwl", "pef",
+    "ptx", "srw", "x3f", "3fr", "fff", "iiq", "mef", "mos", "erf", "kdc", "dcr", "dcs", "drf",
+    "k25", "mrw", "mdc", "raw", "rwz", "cap", "eip", "bay", "ari", "ori", "pxn",
 ];
-pub const VIDEO_EXT: &[&str] = &["mp4", "mov", "m4v", "avi", "mkv", "wmv", "webm", "3gp", "mts", "m2ts"];
+pub const VIDEO_EXT: &[&str] = &[
+    "mp4", "m4v", "mov", "wmv", "asf", "avi", "mkv", "webm", "3gp", "3g2", "mts", "m2ts",
+    "mpg", "mpeg", "vob",
+];
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Item {
@@ -182,9 +190,12 @@ pub fn read_item(p: &Path, size: u64, mtime: i64, ctime: i64) -> Item {
         name: p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
         dir: p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default(),
         fmt: match ext.as_str() {
-            "jpg" | "jpeg" => "JPEG".into(),
-            "heic" | "heif" => "HEIF".into(),
+            "jpg" | "jpeg" | "jpe" | "jfif" | "jfi" | "jif" => "JPEG".into(),
+            "heic" | "heif" | "hif" => "HEIF".into(),
             "tif" | "tiff" => "TIFF".into(),
+            "jxr" | "wdp" | "hdp" => "JPEG XR".into(),
+            "dib" | "rle" => "BMP".into(),
+            "apng" => "PNG".into(),
             e => e.to_uppercase(),
         },
         video,

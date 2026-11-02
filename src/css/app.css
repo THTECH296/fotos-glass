@@ -639,3 +639,43 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
   .nav-knob, .lg-group > .hov { transition: none; }
 }
 .menu .mi kbd ~ .ic { margin-left: 8px; }
+
+
+/* ============ formatos: iPhone / iPad / Mac ============ */
+#side-scrim { display: none; }
+html.size-switch #sidebar, html.size-switch #main, html.size-switch #side-scrim { transition: none !important; }
+html:not([data-size="desktop"]) #sidebar { z-index: 60; box-shadow: 0 30px 80px rgba(0, 0, 0, .35), var(--g-shadow); --g-tint: color-mix(in srgb, var(--bg-2) 84%, transparent); }
+html:not([data-size="desktop"]) body.side-open #sidebar { transform: none; opacity: 1; pointer-events: auto; }
+html:not([data-size="desktop"]) #side-scrim { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, .28); opacity: 0; pointer-events: none; transition: opacity .3s; }
+html:not([data-size="desktop"]) body.side-open #side-scrim { opacity: 1; pointer-events: auto; }
+
+/* ---------- iPhone ---------- */
+html[data-size="phone"] #sidebar { left: 0; top: 0; bottom: 0; width: min(330px, 88vw); border-radius: 0 26px 26px 0; }
+html[data-size="phone"] #toolbar .pill:has([title^="Diminuir"]) { display: none; }
+html[data-size="phone"] #toolbar { gap: 6px; padding-left: 10px; }
+html[data-size="phone"] .tb-title b { font-size: 20px; }
+html.win-frameless[data-size="phone"] #toolbar { padding-right: calc(var(--winctl-w) + 6px); }
+/* embaixo: Anos/Meses/Todas numa linha, abas + busca na outra */
+html[data-size="phone"] #bottom {
+  height: auto; bottom: 14px; display: grid; grid-template-columns: auto auto; justify-content: center; align-items: center; gap: 10px 10px;
+}
+html[data-size="phone"] #bottom > .seg:not(.tabbar) { grid-column: 1 / -1; justify-self: center; order: -1; }
+html[data-size="phone"] #bottom > .selbar { grid-column: 1 / -1; }
+html[data-size="phone"] .tabbar button { width: 104px; }
+html[data-size="phone"] .page { padding: 70px 14px 170px; }
+html[data-size="phone"] .page-head h1 { font-size: 30px; }
+html[data-size="phone"] .edge-bottom { height: 180px; }
+html[data-size="phone"] #bottom > .tabbar { justify-self: end; }
+html[data-size="phone"] #bottom > .search-orb { justify-self: start; }
+/* barra de abas: a bolha de seleção flutua atrás do botão ativo (antes ocupava espaço como se fosse um botão) */
+.tabbar { position: relative; }
+.tabbar > .knob {
+  position: absolute; z-index: 1; top: 4px; height: 48px; border-radius: 999px; background: var(--fill-2);
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .25), 0 2px 8px rgba(0, 0, 0, .06);
+  transition: left .5s var(--spring), width .5s var(--spring), transform .3s var(--spring);
+}
+
+/* crédito nos Ajustes */
+.credit { margin: 18px 0 0; text-align: center; font-size: 12px; color: var(--label-3); }
+.credit a { color: var(--label-2); text-decoration: none; }
+.credit a:hover { text-decoration: underline; }

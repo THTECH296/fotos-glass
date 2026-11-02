@@ -38,9 +38,11 @@ export const api = {
 };
 
 /** URLs: miniatura (cache do Shell) e arquivo inteiro. */
-export function thumbUrl(it, px, editV) {
+/** `fill`: a imagem vai preencher um quadrado (object-fit: cover) — o lado menor vem com `px` e já cortado. */
+export function thumbUrl(it, px, editV, fill = false) {
   if (!native) return `https://picsum.photos/seed/${it.seed}/${demoSize(it, px)}`;
-  return editV ? `http://thumb.localhost/r/${it.id}?s=${px}&v=${editV}` : `http://thumb.localhost/${it.id}?s=${px}`;
+  const c = fill ? '&c=1' : '';
+  return editV ? `http://thumb.localhost/r/${it.id}?s=${px}&v=${editV}${c}` : `http://thumb.localhost/${it.id}?s=${px}${c}`;
 }
 export function fullUrl(it, editV) {
   if (!native) return `https://picsum.photos/seed/${it.seed}/${demoSize(it, 1800)}`;

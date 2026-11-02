@@ -122,6 +122,18 @@ pub fn shrink(w: u32, h: u32, rgb: Vec<u8>, max: u32) -> (u32, u32, Vec<u8>) {
     (nw, nh, out)
 }
 
+/// Quadrado do meio da imagem (para miniaturas que preenchem a grade).
+pub fn crop_square(w: u32, h: u32, rgb: &[u8]) -> (u32, u32, Vec<u8>) {
+    let side = w.min(h);
+    let (x0, y0) = ((w - side) / 2, (h - side) / 2);
+    let mut out = Vec::with_capacity((side * side * 3) as usize);
+    for y in y0..y0 + side {
+        let a = ((y * w + x0) * 3) as usize;
+        out.extend_from_slice(&rgb[a..a + (side * 3) as usize]);
+    }
+    (side, side, out)
+}
+
 pub fn jpeg(w: u32, h: u32, rgb: &[u8], quality: u8) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let enc = jpeg_encoder::Encoder::new(&mut out, quality);

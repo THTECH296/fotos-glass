@@ -20,7 +20,11 @@ const BTN = '.gbtn, .pb';
 document.addEventListener('pointerover', e => {
   const b = e.target.closest?.(BTN);
   const group = b?.closest(GROUP);
-  if (!group || b.disabled || b.parentElement !== group) return;
+  if (!group || b.disabled || b.parentElement !== group) {
+    // mouse sobre algo que não é botão dentro do grupo (ex.: barra de volume): a bolha some
+    e.target.closest?.(GROUP)?.classList.remove('hovering');
+    return;
+  }
   let blob = group.querySelector(':scope > .hov');
   if (!blob) {
     blob = document.createElement('i');

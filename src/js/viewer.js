@@ -110,7 +110,7 @@ async function deleteNow(it) {
   dropRefs(it.id);
   S.all = S.all.filter(i => i !== it);
   S.byId.delete(it.id);
-  save();
+  save(true);
   afterRemoval();
 }
 

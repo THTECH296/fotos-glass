@@ -3,7 +3,7 @@
 import { api, native, thumbUrl } from './api.js';
 import { $, h, icon, fmt, nf, norm, debounce, MESES } from './util.js';
 import {
-  S, save, onChange, loadData, setItems, library, SETS, MEDIA_TYPES, UTILITIES, setItemsFor, months, years, recentDays,
+  S, save, flushSave, onChange, loadData, setItems, library, SETS, MEDIA_TYPES, UTILITIES, setItemsFor, months, years, recentDays,
   keyPhoto, memories, trips, albumById, albumItems, search, suggestions, toggleFav, setHidden, softDelete, recover,
   createAlbum, addToAlbum, removeFromAlbum, purgeOld, dropRefs, isFav, editV, isDeleted, isHidden, featured, placeLabel,
   resolvePlace, rangeLabel, duplicates, derive,
@@ -42,7 +42,8 @@ function wireWindow() {
   const w = api.win;
   if (w) {
     document.documentElement.classList.add('win-frameless');
-    $('.w-close').onclick = () => w.close();
+    $('.w-close').onclick = async () => { await flushSave(); w.close(); };
+    w.onCloseRequested?.(async e => { e.preventDefault(); await flushSave(); w.destroy(); });
     $('.w-min').onclick = () => w.minimize();
     $('.w-max').onclick = () => w.toggleMaximize();
     // maximizada ou em tela cheia, a janela encosta nas bordas da tela: cantos retos
@@ -61,9 +62,29 @@ function wireWindow() {
   $('#side-toggle').append(icon('sidebar'));
   $('#side-toggle').onclick = toggleSidebar;
   $('#search-ic').replaceWith(icon('search'));
-  if (innerWidth < 760) document.body.classList.add('side-off');
+  applySize(true);
 }
+
+// ============ tamanho da janela: iPhone / iPad / Mac ============
+// iPhone (< 700 px) e iPad (< 1100 px): sem barra lateral fixa, com as abas Biblioteca/Coleções embaixo;
+// a barra lateral (álbuns, busca) abre por cima. Mac: barra lateral fixa.
+const sizeOf = w => (w < 700 ? 'phone' : w < 1100 ? 'tablet' : 'desktop');
+const compact = () => document.documentElement.dataset.size !== 'desktop';
+function applySize(first) {
+  const html = document.documentElement;
+  const sz = sizeOf(innerWidth);
+  if (html.dataset.size === sz) return;
+  html.classList.add('size-switch');
+  requestAnimationFrame(() => requestAnimationFrame(() => html.classList.remove('size-switch')));
+  html.dataset.size = sz;
+  document.body.classList.remove('side-open');
+  document.body.classList.toggle('side-off', sz !== 'desktop');
+  if (!first) renderChrome();
+}
+addEventListener('resize', () => applySize(false));
+$('#side-scrim').onclick = () => document.body.classList.remove('side-open');
 function toggleSidebar() {
+  if (compact()) return document.body.classList.toggle('side-open');
   document.body.classList.toggle('side-off');
   renderChrome();
 }
@@ -74,6 +95,7 @@ export function go(route, push = false) {
   else R.back = [];
   endSelect(false);
   R.route = route;
+  document.body.classList.remove('side-open');
   renderView();
   renderNav();
 }
@@ -344,7 +366,7 @@ async function deleteForever(ids) {
     for (const id of ids) dropRefs(id);
     S.all = S.all.filter(i => !ids.includes(i.id));
     ids.forEach(id => S.byId.delete(id));
-    save();
+    save(true);
     endSelect();
     toast('Movido para a Lixeira do Windows', 'trash');
   } catch (e) {
@@ -382,7 +404,7 @@ export function pickAlbum(ids) {
       S.data.albums.map(a => {
         const cover = albumItems(a).at(-1);
         return h('button.row', { onclick: () => { addToAlbum(a.id, ids); close(); endSelect(); toast(`Adicionado a “${a.name}”`, 'album'); } },
-          cover ? h('img', { src: thumbUrl(cover, 200, editV(cover)) }) : icon('album'), h('span.lbl', a.name), h('span.val', nf.format(albumItems(a).length)));
+          cover ? h('img', { src: thumbUrl(cover, 200, editV(cover), true) }) : icon('album'), h('span.lbl', a.name), h('span.val', nf.format(albumItems(a).length)));
       }));
     el.append(h('h2', 'Adicionar ao Álbum'), h('p.sub', fmt.items(ids.length)), list, h('div.foot', h('button.gbtn', { onclick: close }, 'Cancelar')));
   });
@@ -475,7 +497,8 @@ function settings() {
         h('div.row', icon('lock'), h('span.lbl', 'Usar Windows Hello para Ocultos e Apagados'), switchEl(st.hello, v => { st.hello = v; save(); })),
         h('div.row', icon('location'), h('span.lbl', 'Nomes de lugares (OpenStreetMap)'), switchEl(st.places, v => { st.places = v; save(); })),
         h('div.row', icon('aspect'), h('span.lbl', 'Mostrar proporção original na grade'), switchEl(st.aspect, v => { st.aspect = v; save(); R.grid?.setAspect(v); }))),
-      h('div.foot', h('button.gbtn.accent', { onclick: close }, 'OK')));
+      h('div.foot', h('button.gbtn.accent', { onclick: close }, 'OK')),
+      h('p.credit', 'Fotos · Criado pela ', h('a', { href: '#', onclick: e => { e.preventDefault(); api.openPath('https://devlumo.com.br'); } }, 'DevLumo')));
   });
 }
 
@@ -515,7 +538,8 @@ async function openFromPath(path) {
 
 // ============ busca ============
 function openSearch() {
-  if (document.body.classList.contains('side-off')) toggleSidebar();
+  if (compact()) document.body.classList.add('side-open');
+  else if (document.body.classList.contains('side-off')) toggleSidebar();
   setTimeout(() => $('#search').focus(), 60);
 }
 const searchInput = $('#search');
@@ -783,7 +807,7 @@ function dayCard(d) {
   const step = Math.max(1, Math.floor(src.length / 4));
   const show = src.filter((_, k) => k % step === 0).slice(0, 4);
   return h(`button.dcard.n${show.length}`, { onclick: () => go({ view: 'day', key: d.key }, true) },
-    show.map(i => h('img', { src: thumbUrl(i, show.length === 1 ? 480 : 320, editV(i)), loading: 'lazy' })),
+    show.map(i => h('img', { src: thumbUrl(i, show.length === 1 ? 480 : 320, editV(i), true), loading: 'lazy' })),
     h('div.t', h('b', fmt.relDay(d.date)), h('span', fmt.items(d.items.length))));
 }
 function memCard(m) {
@@ -802,17 +826,17 @@ function pinTile(k) {
   }
   if (k === 'map') {
     const cover = items.at(-1);
-    return h('button.pin.map-pin', { onclick: () => go(p.route, true) }, cover ? h('img', { src: thumbUrl(cover, 480, editV(cover)), style: { filter: 'saturate(.6) brightness(1.05)' } }) : null, icon('location', 'big'), h('div.t', icon('map'), 'Mapa'));
+    return h('button.pin.map-pin', { onclick: () => go(p.route, true) }, cover ? h('img', { src: thumbUrl(cover, 480, editV(cover), true), style: { filter: 'saturate(.6) brightness(1.05)' } }) : null, icon('location', 'big'), h('div.t', icon('map'), 'Mapa'));
   }
   const cover = items.at(-1);
   if (!cover) return h('button.pin.none', { onclick: () => go(p.route, true) }, icon(p.ic), h('div.t', p.label));
-  return h('button.pin', { onclick: () => go(p.route, true) }, h('img', { src: thumbUrl(cover, 480, editV(cover)), loading: 'lazy' }), h('div.t', icon(p.ic), p.label));
+  return h('button.pin', { onclick: () => go(p.route, true) }, h('img', { src: thumbUrl(cover, 480, editV(cover), true), loading: 'lazy' }), h('div.t', icon(p.ic), p.label));
 }
 function albumCard(a) {
   const items = albumItems(a);
   const c = items.at(-1);
   return h('button.acard', { onclick: () => go({ view: 'album', id: a.id }, true), oncontextmenu: e => navContext(e, { view: 'album', id: a.id }) },
-    h('div.cv', c ? h('img', { src: thumbUrl(c, 480, editV(c)), loading: 'lazy' }) : icon('album')), h('b', a.name), h('span', nf.format(items.length)));
+    h('div.cv', c ? h('img', { src: thumbUrl(c, 480, editV(c), true), loading: 'lazy' }) : icon('album')), h('b', a.name), h('span', nf.format(items.length)));
 }
 function listRow(ic, label, val, onclick) {
   return h('button.row', { onclick }, icon(ic), h('span.lbl', label), val != null ? h('span.val', val) : null, icon('fwd', 'chev'));
@@ -832,7 +856,7 @@ function collectionsView(restoreScroll) {
   const tr = trips();
   if (tr.length) page.append(sec('Viagens', () => go({ view: 'trips' }, true), h('div.hscroll', tr.slice(0, 10).map(tripCard))));
   const fe = featured(16);
-  if (fe.length) page.append(sec('Em Destaque', () => go({ view: 'set', key: 'featured' }, true), h('div.hscroll', fe.slice(0, 10).map(i => h('button.memcard', { style: { width: '200px' }, onclick: () => openViewer(fe, fe.indexOf(i), {}) }, h('img', { src: thumbUrl(i, 480, editV(i)), loading: 'lazy' }))))));
+  if (fe.length) page.append(sec('Em Destaque', () => go({ view: 'set', key: 'featured' }, true), h('div.hscroll', fe.slice(0, 10).map(i => h('button.memcard', { style: { width: '200px' }, onclick: () => openViewer(fe, fe.indexOf(i), {}) }, h('img', { src: thumbUrl(i, 480, editV(i), true), loading: 'lazy' }))))));
   const types = MEDIA_TYPES.map(k => [k, SETS[k].get().length]).filter(([, n]) => n);
   page.append(h('div.lists',
     types.length ? h('section.sec', h('div.sec-head', h('h2', 'Tipos de Mídia')), h('div.list', types.map(([k, n]) => listRow(SETS[k].icon, SETS[k].title, nf.format(n), () => go({ view: 'set', key: k }, true))))) : null,
@@ -1009,9 +1033,10 @@ async function boot() {
   renderNav();
   renderView();
   ambient();
+  // a janela aparece já; a foto aberta pelo Explorador entra logo depois (ler a pasta pode levar segundos)
+  api.win?.show();
   const launch = await api.launchFile();
   if (launch) await openFromPath(launch);
-  api.win?.show();
   if (native) window.__TAURI__.event.listen('open-file', e => openFromPath(e.payload));
   await rescan(!cached.length);
   ambient();

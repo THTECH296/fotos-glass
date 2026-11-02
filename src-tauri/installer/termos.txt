@@ -1,0 +1,23 @@
+﻿Fotos — Termos de Uso
+Criado pela DevLumo · https://devlumo.com.br
+© 2026 DevLumo. Todos os direitos reservados.
+
+Obrigado por instalar o Fotos.
+
+1. USO
+Você pode instalar e usar o Fotos gratuitamente, em quantos computadores quiser, para uso pessoal ou profissional. Não é permitido vender o programa ou distribuí-lo modificado como se fosse seu.
+
+2. SEUS DADOS
+O Fotos mostra as fotos e vídeos das pastas que você escolher. Álbuns, favoritos e edições ficam guardados só no seu computador; as edições não alteram o arquivo original. Fotos apagadas vão para "Apagados Recentemente" e, depois de 30 dias, para a Lixeira do Windows.
+A DevLumo não coleta, não vende e não recebe nenhuma informação sua. O programa não tem anúncios nem rastreamento.
+
+3. INTERNET
+O Fotos só usa a internet para mostrar o mapa e o nome dos lugares das fotos com localização.
+
+4. SEM GARANTIA
+O Fotos é fornecido "como está". Fazemos o possível para que funcione bem, mas a DevLumo não se responsabiliza por perda de dados ou outros danos decorrentes do uso. Mantenha cópias de segurança dos seus arquivos importantes.
+
+5. DESINSTALAR
+Para remover, vá em Configurações do Windows > Aplicativos > Aplicativos instalados, procure "Fotos" e clique em Desinstalar.
+
+Dúvidas ou sugestões: https://devlumo.com.br

@@ -134,6 +134,35 @@ fn mtime(p: &Path) -> u64 {
 
 /// JPEG de `p` pelo Shell, guardado em `dir`.
 fn cached_shell_jpeg(dir: &Path, key: &str, p: &Path, size: i32, q: u8) -> Option<Vec<u8>> {
+    cached_shell_jpeg_mode(dir, key, p, size, q, false)
+}
+
+/// `fill`: a miniatura vai preencher um quadrado (grade). Garante que o LADO MENOR tenha `size`
+/// e já corta o quadrado do meio — antes vinha "cabendo" no quadrado e a grade esticava o lado
+/// menor (fotos 4:3 ficavam 1,3× ampliadas; capturas 16:9 quase 2×, por isso borradas).
+fn cached_shell_jpeg_mode(dir: &Path, key: &str, p: &Path, size: i32, q: u8, fill: bool) -> Option<Vec<u8>> {
+    if fill {
+        let file = dir.join(format!("{key}_{size}q_{}.jpg", mtime(p)));
+        if let Ok(b) = fs::read(&file) {
+            return Some(b);
+        }
+        let sizes = [256, 768, 1280, 1920, 2560];
+        let mut i = sizes.iter().position(|&s| s as f64 >= size as f64 * 1.34).unwrap_or(sizes.len() - 1);
+        let (mut w, mut h, mut rgb) = shell::thumbnail_rgb(&p.to_string_lossy(), sizes[i])?;
+        // panorama/captura muito alongada: o lado menor ainda é pequeno, pede o próximo tamanho
+        while (w.min(h) as i32) < size && i + 1 < sizes.len() && (w.max(h) as i32) >= sizes[i] - 1 {
+            i += 1;
+            match shell::thumbnail_rgb(&p.to_string_lossy(), sizes[i]) {
+                Some(t) => (w, h, rgb) = t,
+                None => break,
+            }
+        }
+        let (w, h, rgb) = shell::crop_square(w, h, &rgb);
+        let (w, h, rgb) = shell::shrink(w, h, rgb, size as u32);
+        let jpg = shell::jpeg(w, h, &rgb, q)?;
+        let _ = fs::write(&file, &jpg);
+        return Some(jpg);
+    }
     let file = dir.join(format!("{key}_{size}_{}.jpg", mtime(p)));
     if let Ok(b) = fs::read(&file) {
         return Some(b);
@@ -153,24 +182,27 @@ fn thumb_protocol(req: Request<Vec<u8>>, r: UriSchemeResponder) {
         return respond(r, 404, "text/plain", vec![], &[]);
     };
     let size = query(&req, "s").and_then(|s| s.parse::<i32>().ok()).unwrap_or(360).clamp(64, 1600);
+    let fill = query(&req, "c").as_deref() == Some("1");
     submit(Box::new(move || {
         let key = if edited { format!("r{id}") } else { id };
-        match cached_shell_jpeg(&dirs().thumbs, &key, &p, size, 88) {
+        match cached_shell_jpeg_mode(&dirs().thumbs, &key, &p, size, 88, fill) {
             Some(b) => respond(r, 200, "image/jpeg", b, &[]),
             None => respond(r, 404, "text/plain", vec![], &[]),
         }
     }));
 }
 
-const NATIVE: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "mp4", "m4v", "mov", "webm"];
+/// o que o WebView2 abre direto; o resto vira JPEG pelo Shell
+const NATIVE: &[&str] = &["jpg", "jpeg", "jpe", "jfif", "jfi", "jif", "png", "apng", "gif", "webp", "bmp", "dib", "ico", "avif", "mp4", "m4v", "mov", "webm"];
 
 fn mime(ext: &str) -> &'static str {
     match ext {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
+        "jpg" | "jpeg" | "jpe" | "jfif" | "jfi" | "jif" => "image/jpeg",
+        "png" | "apng" => "image/png",
+        "ico" => "image/x-icon",
         "gif" => "image/gif",
         "webp" => "image/webp",
-        "bmp" => "image/bmp",
+        "bmp" | "dib" => "image/bmp",
         "avif" => "image/avif",
         "mp4" | "m4v" => "video/mp4",
         "mov" => "video/mp4",
@@ -228,10 +260,38 @@ fn load_state() -> Value {
 
 #[tauri::command]
 fn save_state(state: Value) -> Result<(), String> {
+    // Uma gravação por vez; cada uma com o seu temporário. Antes todas usavam "state.tmp" e,
+    // quando duas se cruzavam ou o Windows segurava o arquivo, o rename falhava em silêncio
+    // e as exclusões feitas depois se perdiam.
+    static LOCK: Mutex<()> = Mutex::new(());
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let file = dirs().root.join("state.json");
-    let tmp = file.with_extension("tmp");
-    fs::write(&tmp, serde_json::to_vec(&state).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &file).map_err(|e| e.to_string())
+    let tmp = dirs().root.join(format!("state.{}.tmp", SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let bytes = serde_json::to_vec(&state).map_err(|e| e.to_string())?;
+    fs::write(&tmp, &bytes).map_err(|e| log_err(format!("gravar temporário: {e}")))?;
+    let mut last = String::new();
+    for i in 0..8 {
+        match fs::rename(&tmp, &file) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last = e.to_string();
+                std::thread::sleep(std::time::Duration::from_millis(60 * (i + 1)));
+            }
+        }
+    }
+    // último recurso: escreve direto por cima
+    let r = fs::write(&file, &bytes).map_err(|e| log_err(format!("rename falhou ({last}) e escrita direta também: {e}")));
+    let _ = fs::remove_file(&tmp);
+    r
+}
+
+fn log_err(msg: String) -> String {
+    use std::io::Write;
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(dirs().root.join("erros.log")) {
+        let _ = writeln!(f, "{} {msg}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+    }
+    msg
 }
 
 #[tauri::command]
@@ -536,6 +596,23 @@ fn main() {
             default_status,
             open_default_settings
         ])
-        .run(tauri::generate_context!())
-        .expect("erro ao iniciar o Fotos");
+        .build(tauri::generate_context!())
+        .expect("erro ao iniciar o Fotos")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                encerrar_agora();
+            }
+        });
+}
+
+/// Encerra o processo na hora ao fechar o app. A saída normal do Windows (ExitProcess) espera os
+/// provedores de miniatura do Shell que ainda estão trabalhando nas threads da fila e às vezes
+/// travava por minutos: o processo ficava vivo e invisível, segurando a "instância única", e todo
+/// duplo clique numa imagem era entregue a ele — nada abria. O estado já foi gravado antes
+/// (a janela só fecha depois do flushSave) e o índice é gravado por rename atômico.
+fn encerrar_agora() {
+    use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+    unsafe {
+        let _ = TerminateProcess(GetCurrentProcess(), 0);
+    }
 }

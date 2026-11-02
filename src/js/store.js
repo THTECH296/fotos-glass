@@ -24,12 +24,39 @@ export const S = {
   version: 0,
 };
 
-const persist = debounce(() => api.saveState(S.data), 350);
-export function save() {
+// Gravação do estado (apagados, favoritos, álbuns…). Uma de cada vez, na ordem; a última sempre vence.
+let saving = Promise.resolve();
+let failedOnce = false;
+function writeNow() {
+  const snapshot = JSON.parse(JSON.stringify(S.data));
+  saving = saving.then(() => api.saveState(snapshot)).then(
+    () => { failedOnce = false; },
+    err => {
+      console.error('falha ao salvar', err);
+      if (!failedOnce) {
+        failedOnce = true;
+        import('./ui.js').then(m => m.toast('Não foi possível salvar as mudanças. Tentando de novo…', 'info'));
+      }
+      setTimeout(writeNow, 1500);
+    },
+  );
+  return saving;
+}
+const persist = debounce(writeNow, 350);
+let unsaved = false;
+/** `now`: grava na hora (exclusões e recuperações não podem se perder se a janela fechar logo depois). */
+export function save(now = false) {
   S.version++;
   cache.clear();
-  persist();
+  unsaved = true;
+  if (now) writeNow().finally(() => (unsaved = false));
+  else persist();
   emit();
+}
+/** Espera a última gravação terminar (usado antes de fechar a janela). */
+export async function flushSave() {
+  if (unsaved) await writeNow();
+  await saving.catch(() => {});
 }
 export function emit() {
   for (const fn of S.listeners) fn();
@@ -45,7 +72,7 @@ export async function loadData() {
 }
 
 const SHOT_RE = /(screenshot|captura de tela|captura|screen ?shot|printscreen|\bprint\b|snip|recorte)/i;
-const RAW = new Set(['DNG', 'CR2', 'CR3', 'NEF', 'ARW', 'RAF', 'ORF', 'RW2']);
+const RAW = new Set(['DNG', 'CR2', 'CR3', 'CRW', 'NEF', 'NRW', 'ARW', 'SRF', 'SR2', 'RAF', 'ORF', 'RW2', 'RWL', 'PEF', 'PTX', 'SRW', 'X3F', '3FR', 'FFF', 'IIQ', 'MEF', 'MOS', 'ERF', 'KDC', 'DCR', 'DCS', 'DRF', 'K25', 'MRW', 'MDC', 'RAW', 'RWZ', 'CAP', 'EIP', 'BAY', 'ARI', 'ORI', 'PXN']);
 
 export function setItems(items) {
   derive(items);
@@ -335,11 +362,11 @@ export function setHidden(ids, value) {
 export function softDelete(ids) {
   const now = Date.now();
   for (const id of ids) S.data.deleted[id] = now;
-  save();
+  save(true);
 }
 export function recover(ids) {
   for (const id of ids) delete S.data.deleted[id];
-  save();
+  save(true);
 }
 export function createAlbum(name, ids = []) {
   const a = { id: 'a' + Date.now().toString(36), name: name || 'Novo Álbum', items: [...new Set(ids)], created: Date.now() };
