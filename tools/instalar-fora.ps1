@@ -1,4 +1,4 @@
-# Instala o Fotos no AppData\Local de verdade e testa a abertura de imagens.
+﻿# Instala o Fotos no AppData\Local de verdade e testa a abertura de imagens.
 #
 # Programas abertos de dentro do app do Claude (pacote MSIX) têm o AppData\Local virtualizado:
 # o que eles gravam vai para Packages\Claude_...\LocalCache\Local, que o resto do Windows não vê.
