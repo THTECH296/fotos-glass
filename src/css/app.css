@@ -9,6 +9,9 @@
   --ease: cubic-bezier(.22, 1, .36, 1);
   --side-w: 268px;
   --gap: 2px;
+  /* espaço livre sob a barra superior e acima da barra inferior flutuantes (o iPhone tem 2 linhas embaixo) */
+  --top-safe: 76px;
+  --bottom-safe: 120px;
 
   --accent: #007aff;
   --red: #ff3b30;
@@ -35,6 +38,8 @@
   --g-text: #000;
   --knob: rgba(255, 255, 255, .92);
   --scrim: rgba(255, 255, 255, .55);
+  --seg-on: var(--bg-3);
+  --map-bg: #dfe7ee;
   color-scheme: light;
 }
 :root[data-theme="dark"] {
@@ -62,6 +67,9 @@
   --g-text: #fff;
   --knob: rgba(255, 255, 255, .2);
   --scrim: rgba(0, 0, 0, .5);
+  /* no escuro, o segmento escolhido é cinza claro como no iOS (o #1c1c1e sumia sobre o vidro) */
+  --seg-on: #636366;
+  --map-bg: #2a3138;
   color-scheme: dark;
 }
 
@@ -71,7 +79,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; }
 /* ---------- janela sem moldura (igual ao ECOA) ----------
    A janela é transparente: o corpo recorta tudo com cantos de 25px e uma linha fina contorna a borda.
    Maximizada ou em tela cheia, cantos retos. */
-:root { --win-radius: 25px; --winctl-w: 128px; }
+:root { --win-radius: 25px; --winctl-w: 136px; }
 html.win-frameless, html.win-frameless body { background: transparent; }
 html.win-frameless body { clip-path: inset(0 round var(--win-radius)); }
 html.win-frameless body::before { content: ''; position: fixed; inset: 0; z-index: -1; background: var(--bg-ambient); }
@@ -96,12 +104,23 @@ html:not(.win-frameless) .win-controls { display: none; }
 .win-controls button:active { background: var(--fill); }
 .win-controls button.close:hover { background: #e5484d; color: #fff; }
 .win-controls button.close:active { background: #c93b40; color: #fff; }
+
+/* botões da janela numa pílula de vidro, como os da barra: legíveis sobre qualquer conteúdo (e-mail branco, foto, capa) */
+.win-controls.glass { position: fixed; top: 12px; height: 40px; padding: 0 3px; gap: 0; border-radius: 999px; transition: top .3s var(--ease); }
+html.win-square .win-controls.glass { top: 8px; }
+.win-controls.glass button { width: 38px; height: 34px; border-radius: 999px; color: var(--g-text); }
+.win-controls.glass svg { width: 13px; height: 13px; stroke-width: 1.5; }
+.win-controls.glass button:hover { background: var(--fill-2); color: var(--g-text); }
 /* sobre o visualizador, editor e memórias os botões ficam claros */
-body:has(.editor, .memory) .win-controls button:not(:hover) { color: rgba(255,255,255,.75); }
+body:has(.editor, .memory) .win-controls.glass { --g-tint: rgba(20, 20, 24, .32); --g-text: #fff; --g-hi: rgba(255,255,255,.5); }
 html.win-frameless #toolbar { padding-right: calc(var(--winctl-w) + 10px); }
 html.win-frameless .v-top, html.win-frameless .e-top, html.win-frameless .m-ctl { right: calc(var(--winctl-w) + 10px); }
-html.win-frameless .with-info .v-top { right: 394px; }
-html.win-frameless .v-info { top: 50px; }
+/* sobre o visualizador e o editor as pílulas têm 48 px a 12 px do topo (centro em 36): os botões da janela descem junto */
+html.win-frameless body:has(.viewer, .editor) .win-controls.glass { top: 16px; }
+/* precisa repetir o .with-info: a regra de cima (html.win-frameless .v-top) é mais específica que a do viewer.css */
+html.win-frameless .with-info .v-top { right: calc(var(--info-w) + 34px); }
+/* o painel começa abaixo dos botões da janela (que descem para 16 + 40 px sobre o visualizador) */
+html.win-frameless .v-info { top: 64px; }
 body {
   font: 15px/1.35 var(--font);
   letter-spacing: -.01em;
@@ -153,8 +172,6 @@ img { -webkit-user-drag: none; }
   mask-composite: exclude;
   opacity: .9;
 }
-.glass.strong { background: var(--g-tint-strong); }
-.glass.clear { background: color-mix(in srgb, var(--g-tint) 40%, transparent); }
 /* sobre fotos: vidro escurecido para o ícone branco ficar legível (como no visualizador) */
 .glass.dim { --g-tint: rgba(20, 20, 24, .28); --g-text: #fff; --g-hi: rgba(255,255,255,.5); }
 
@@ -163,11 +180,11 @@ img { -webkit-user-drag: none; }
   height: 40px; min-width: 40px; padding: 0 12px; border-radius: 999px;
   display: inline-grid; grid-auto-flow: column; place-items: center; gap: 6px;
   font-weight: 590; font-size: 15px; white-space: nowrap;
-  transition: transform .35s var(--spring), background .2s;
+  transition: transform .45s var(--spring), background .2s, color .2s;
 }
 .gbtn.round { padding: 0; width: 40px; }
 .gbtn:hover { background: var(--fill); }
-.gbtn:active { transform: scale(.9); }
+.gbtn:active { transform: scale(.86); }
 .gbtn.on { color: var(--accent); }
 .gbtn.accent { background: var(--accent); color: #fff; }
 .gbtn.accent:hover { background: color-mix(in srgb, var(--accent) 88%, #fff); }
@@ -193,9 +210,10 @@ img { -webkit-user-drag: none; }
 #sidebar {
   position: absolute; z-index: 30; left: 10px; top: 10px; bottom: 10px; width: var(--side-w);
   border-radius: 26px; display: flex; flex-direction: column; overflow: hidden;
-  transition: transform .55s var(--spring), opacity .3s;
+  transition: transform .55s var(--spring), opacity .3s, visibility 0s;
 }
-body.side-off #sidebar { transform: translateX(calc(-100% - 24px)); opacity: 0; pointer-events: none; }
+/* escondida, sai também da ordem do Tab e do leitor de tela (o visibility só muda depois do deslize) */
+body.side-off #sidebar { transform: translateX(calc(-100% - 24px)); opacity: 0; pointer-events: none; visibility: hidden; transition: transform .55s var(--spring), opacity .3s, visibility 0s .55s; }
 .side-top { height: 52px; flex: none; display: flex; align-items: center; padding: 0 12px 0 18px; gap: 8px; }
 .side-top::before { content: "Fotos"; font: 700 15px var(--font-d); letter-spacing: -.01em; color: var(--label-2); }
 .side-top .grow { flex: 1; align-self: stretch; }
@@ -210,7 +228,12 @@ body.side-off #sidebar { transform: translateX(calc(-100% - 24px)); opacity: 0; 
 .side-search input::placeholder { color: var(--label-2); }
 .side-search input:focus { box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 45%, transparent); background: var(--bg-3); }
 
-#nav { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 10px 14px; }
+#nav {
+  flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 10px 14px;
+  /* a lista some suave nas bordas do vidro, em vez de cortar seco */
+  -webkit-mask: linear-gradient(transparent, #000 10px, #000 calc(100% - 22px), transparent);
+  mask: linear-gradient(transparent, #000 10px, #000 calc(100% - 22px), transparent);
+}
 .nav-sec { margin-top: 14px; }
 .nav-head {
   display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 4px 10px;
@@ -241,9 +264,9 @@ body.side-off #sidebar { transform: translateX(calc(-100% - 24px)); opacity: 0; 
 }
 body.side-off #main { left: 0; }
 
-#view { position: absolute; inset: 0; }
+/* contexto de empilhamento próprio: os panes do Leaflet (z-index 400) cobriam a barra superior e as abas */
+#view { position: absolute; inset: 0; z-index: 0; isolation: isolate; }
 .scroller { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; scroll-behavior: auto; }
-.scroller.snap { scroll-behavior: smooth; }
 
 /* barra superior flutuante + efeito de borda de rolagem */
 #toolbar {
@@ -261,17 +284,18 @@ body.side-off #main { left: 0; }
   opacity: 0; transition: opacity .25s;
 }
 .edge-bottom {
-  bottom: 0; height: 110px;
+  bottom: 0; height: 96px;
   background: linear-gradient(transparent, color-mix(in srgb, var(--bg) 60%, transparent));
-  -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
   -webkit-mask: linear-gradient(transparent, #000 60%); mask: linear-gradient(transparent, #000 60%);
 }
 #main.scrolled .edge-top { opacity: 1; }
+/* sem barra flutuante embaixo (Coleções, Memórias, Busca no Mac), nada de esmaecer o fim da tela */
+#main:has(#bottom:empty) .edge-bottom { display: none; }
 
-.tb-title { display: flex; flex-direction: column; justify-content: center; min-width: 0; pointer-events: auto; padding-left: 2px; }
+.tb-title { display: flex; flex-direction: column; justify-content: center; min-width: 0; pointer-events: auto; padding-left: 2px; transition: opacity .2s; }
 .tb-title b { font: 700 22px/1.1 var(--font-d); letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity .2s; }
 .tb-title span { font-size: 13px; color: var(--label-2); white-space: nowrap; margin-top: 1px; }
-.on-photo .tb-title b, .on-photo .tb-title span { color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.35); }
 
 /* ---------- barra inferior: controle segmentado / tab bar ---------- */
 #bottom {
@@ -306,7 +330,6 @@ body.side-off #main { left: 0; }
 }
 .tabbar button .ic { width: 23px; height: 23px; }
 .tabbar button.active { color: var(--accent); }
-.tabbar .knob { top: 4px; height: 48px; }
 .search-orb { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; }
 .search-orb .ic { width: 23px; height: 23px; }
 body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
@@ -332,31 +355,35 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
 .tile .days { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 6px 4px; font: 600 11.5px var(--font); color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.45)); pointer-events: none; }
 .tile::after { content: ""; position: absolute; inset: 0; background: #fff; opacity: 0; transition: opacity .15s; pointer-events: none; }
 .tile:hover::after { opacity: .06; }
+/* no escuro o hover escurece (o branco clareava a foto) */
+:root[data-theme="dark"] .tile::after { background: #000; }
 .selecting .tile .chk {
   position: absolute; right: 5px; bottom: 5px; width: 22px; height: 22px; border-radius: 50%;
   border: 1.5px solid #fff; background: rgba(0,0,0,.12); box-shadow: 0 0 3px rgba(0,0,0,.4); pointer-events: none;
 }
 .tile.sel::after { opacity: .3; background: #fff; }
-:root[data-theme="dark"] .tile.sel::after { background: #000; opacity: .3; }
+:root[data-theme="dark"] .tile.sel::after { opacity: .3; }
 .tile.sel .chk { border: 0; background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m7 12.4 3.3 3.3 6.6-7' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/20px no-repeat; }
-.tile.focus { outline: 3px solid var(--accent); outline-offset: -3px; }
+/* navegação pelo teclado (grid.js): a grade tem um foco só, e o anel fica no quadrado da vez */
+.vgrid:focus, .vgrid:focus-visible { outline: none; }
+.vgrid:focus .tile.focus { outline: 3px solid var(--accent); outline-offset: -3px; z-index: 1; }
 .tile.pop { animation: pop .5s var(--spring); }
 @keyframes pop { from { transform: scale(.94); } }
 
-.grid-foot { text-align: center; padding: 26px 0 110px; color: var(--label-2); font-size: 14px; }
+.grid-foot { text-align: center; padding: 26px 0 var(--bottom-safe); color: var(--label-2); font-size: 14px; }
 .grid-foot b { display: block; color: var(--label); font-size: 15px; font-weight: 600; margin-bottom: 2px; }
 
 /* ---------- cabeçalhos de página ---------- */
-.page { padding: 76px 28px 120px; }
+.page { padding: var(--top-safe) 28px var(--bottom-safe); }
 .page-head { padding: 0 2px 16px; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .page-head h1 { font: 700 34px/1.1 var(--font-d); letter-spacing: -.025em; margin: 0; }
 .page-head p { margin: 4px 0 0; color: var(--label-2); font-size: 15px; }
-.grid-head { padding: 76px 22px 14px; }
+.grid-head { padding: var(--top-safe) 22px 14px; }
 .grid-head h1 { font: 700 34px/1.1 var(--font-d); letter-spacing: -.025em; margin: 0; }
 .grid-head p { margin: 4px 0 0; color: var(--label-2); }
 
 /* ---------- Anos / Meses ---------- */
-.cards { display: grid; gap: 18px; padding: 76px 22px 120px; }
+.cards { display: grid; gap: 18px; padding: var(--top-safe) 22px var(--bottom-safe); }
 .cards.years { grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr)); }
 .cards.months { grid-template-columns: repeat(auto-fill, minmax(min(100%, 290px), 1fr)); }
 .ycard, .mcard {
@@ -392,7 +419,9 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
 .sec-head .act:hover { background: var(--fill); }
 .sec-head h2.link { cursor: default; }
 .sec-head h2.link:hover .ic { color: var(--label-2); }
-.hscroll { display: grid; grid-auto-flow: column; gap: 12px; overflow-x: auto; overflow-y: hidden; padding: 2px 2px 10px; scroll-snap-type: x proximity; scrollbar-width: thin; }
+/* colunas do tamanho do cartão, encostadas à esquerda e alinhadas pelo topo: com poucos álbuns as trilhas "auto"
+   esticavam e abriam vãos enormes. Sem scrollbar-width: ele desligava a barra fina "só no hover" do resto do app. */
+.hscroll { display: grid; grid-auto-flow: column; grid-auto-columns: max-content; justify-content: start; align-items: start; gap: 12px; overflow-x: auto; overflow-y: hidden; padding: 2px 2px 10px; scroll-snap-type: x proximity; }
 .hscroll > * { scroll-snap-align: start; }
 
 .dcard, .memcard, .pin, .acard { text-align: left; }
@@ -404,7 +433,7 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
 .dcard.n3 img:first-child { grid-column: span 2; }
 .dcard.n4 { grid-template: 1fr 1fr / 1fr 1fr; }
 .dcard img { width: 100%; height: 100%; object-fit: cover; min-height: 0; }
-.dcard .t { position: absolute; inset: auto 0 0 0; padding: 40px 14px 12px; color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.55)); }
+.dcard .t { position: absolute; inset: auto 0 0 0; padding: 60px 14px 12px; color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.6)); text-shadow: 0 1px 10px rgba(0,0,0,.35); }
 .dcard .t b { font: 700 18px/1.15 var(--font-d); display: block; }
 .dcard .t span { font-size: 12.5px; opacity: .88; }
 
@@ -422,17 +451,19 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
 .pin { position: relative; aspect-ratio: 1; border-radius: 20px; overflow: hidden; background: var(--tile-bg); transition: transform .45s var(--spring); }
 .pin:hover { transform: scale(1.025); }
 .pin img { width: 100%; height: 100%; object-fit: cover; }
-.pin .t { position: absolute; inset: auto 0 0 0; padding: 30px 12px 10px; color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.5)); display: flex; align-items: center; gap: 6px; font-weight: 650; font-size: 15px; }
-.pin .t .ic { width: 17px; height: 17px; }
+/* ícone alinhado à primeira linha: "Apagados Recentemente" quebra em 2 e o ícone ficava solto no meio */
+.pin .t { position: absolute; inset: auto 0 0 0; padding: 30px 12px 10px; color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.5)); display: flex; align-items: flex-start; gap: 6px; font-weight: 650; font-size: 15px; }
+.pin .t .ic { width: 17px; height: 17px; margin-top: 1.5px; }
+.pin.locked .t { color: var(--label); background: none; }
 .pin.none { display: grid; place-items: center; color: var(--label-2); background: var(--fill); }
 .pin.none .ic { width: 40px; height: 40px; stroke-width: 1.4; }
 .pin.none .t { color: var(--label); background: none; }
 .pin .lockface { position: absolute; inset: 0; display: grid; place-items: center; background: var(--fill); color: var(--label-2); }
 .pin .lockface .ic { width: 40px; height: 40px; stroke-width: 1.4; }
-.pin.map-pin { background: #dfe7ee; }
+.pin.map-pin { background: var(--map-bg); }
 .pin.map-pin .ic.big { position: absolute; inset: 0; margin: auto; width: 46px; height: 46px; color: var(--accent); }
 
-.acard { width: 196px; }
+.acard { width: 196px; display: flex; flex-direction: column; align-items: stretch; }
 .acard .cv { aspect-ratio: 1; border-radius: 18px; overflow: hidden; background: var(--fill); display: grid; place-items: center; transition: transform .45s var(--spring); }
 .acard:hover .cv { transform: scale(1.03); }
 .acard .cv img { width: 100%; height: 100%; object-fit: cover; }
@@ -443,7 +474,6 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
 .acard.new .cv .ic { color: var(--accent); width: 36px; height: 36px; }
 
 .list { background: var(--bg-2); border-radius: 18px; overflow: hidden; }
-:root[data-theme="dark"] .list { background: var(--bg-2); }
 .row { height: 50px; display: flex; align-items: center; gap: 14px; padding: 0 16px; position: relative; width: 100%; text-align: left; }
 .row + .row::before { content: ""; position: absolute; top: 0; left: 52px; right: 0; border-top: .5px solid var(--sep); }
 .row .ic { color: var(--accent); width: 22px; height: 22px; }
@@ -475,17 +505,16 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
 /* ---------- menus e folhas ---------- */
 .menu {
   position: fixed; z-index: 200; min-width: 236px; padding: 6px; border-radius: 18px;
-  transform-origin: var(--ox, top left); animation: menu-in .38s var(--spring);
+  transform-origin: var(--ox, top left); animation: menu-in .42s var(--spring);
   --g-tint: var(--g-tint-strong); --blur: 30px;
 }
 @keyframes menu-in { from { opacity: 0; transform: scale(.82); } }
-.menu .mi { width: 100%; height: 36px; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-radius: 10px; font-size: 15px; text-align: left; }
+.menu .mi { width: 100%; height: 36px; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-radius: 10px; font-size: 15px; text-align: left; white-space: nowrap; }
 .menu .mi .ic { width: 19px; height: 19px; margin-left: auto; order: 2; }
 .menu .mi:hover { background: var(--accent); color: #fff; }
 .menu .mi.danger { color: var(--red); }
 .menu .mi.danger:hover { background: var(--red); color: #fff; }
-.menu .mi.checked::before { content: "✓"; position: absolute; left: 0; }
-.menu .mi .tick { width: 14px; font-weight: 700; color: var(--accent); }
+.menu .mi .tick { width: 14px; flex: none; font-weight: 700; color: var(--accent); }
 .menu .mi:hover .tick { color: #fff; }
 .menu hr { border: 0; border-top: .5px solid var(--sep); margin: 5px 10px; }
 .menu .mh { padding: 6px 12px 4px; font-size: 12.5px; color: var(--label-2); font-weight: 600; }
@@ -500,6 +529,7 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
   --g-tint: var(--g-tint-strong); --blur: 30px;
 }
 @keyframes alert-in { from { opacity: 0; transform: scale(1.15); } }
+.alert:focus, .sheet:focus { outline: none; }
 .alert h3 { margin: 0 0 6px; font: 650 17px var(--font); }
 .alert p { margin: 0 0 14px; color: var(--label-2); font-size: 14px; }
 .alert input { width: 100%; height: 38px; border-radius: 12px; border: 0; outline: 0; background: var(--fill); padding: 0 12px; margin-bottom: 14px; font-size: 15px; }
@@ -520,9 +550,11 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
 .sheet .sub { color: var(--label-2); margin: 0 0 16px; font-size: 14px; }
 .sheet .grp { background: var(--fill); border-radius: 16px; margin-bottom: 18px; overflow: hidden; }
 .sheet .grp-t { font-size: 13px; color: var(--label-2); margin: 0 4px 6px; font-weight: 600; text-transform: uppercase; letter-spacing: .02em; }
-.sheet .row { height: 48px; }
-.sheet .row .lbl { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sheet .row .x { color: var(--red); }
+/* como nas células do iOS, o rótulo quebra linha (no iPhone ele virava "Abrir fotos e víd…") */
+.sheet .row { height: auto; min-height: 48px; padding-block: 8px; }
+.sheet .row .lbl { font-size: 15px; overflow-wrap: anywhere; }
+/* a cor do .row .ic (azul) pintava o SVG direto e vencia o vermelho do botão de remover */
+.sheet .row .x, .sheet .row .x .ic { color: var(--red); }
 .sheet .foot { display: flex; justify-content: flex-end; gap: 10px; }
 .switch { width: 51px; height: 31px; border-radius: 999px; background: var(--fill-2); position: relative; transition: background .25s; flex: none; }
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 3px 8px rgba(0,0,0,.15), 0 1px 1px rgba(0,0,0,.16); transition: transform .4s var(--spring), width .3s var(--spring); }
@@ -532,18 +564,20 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
 .switch.on:active::after { transform: translateX(14px); }
 .segsmall { display: flex; background: var(--fill); border-radius: 10px; padding: 2px; }
 .segsmall button { padding: 4px 12px; border-radius: 8px; font-size: 13px; font-weight: 600; }
-.segsmall button.on { background: var(--bg-3); box-shadow: 0 2px 6px rgba(0,0,0,.12); }
+.segsmall button.on { background: var(--seg-on); box-shadow: 0 2px 6px rgba(0,0,0,.12); }
 
 .picker-list { max-height: 360px; overflow: auto; }
 .picker-list .row img { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; background: var(--fill); }
 
 .toast {
   position: fixed; z-index: 260; left: 50%; bottom: 92px; translate: -50% 0;
-  height: 44px; border-radius: 999px; padding: 0 18px; display: flex; align-items: center; gap: 10px;
+  min-height: 44px; max-width: calc(100vw - 32px); border-radius: 999px; padding: 0 18px; display: flex; align-items: center; gap: 10px;
   font-weight: 600; font-size: 14px; animation: toast-in .5s var(--spring);
   --g-tint: var(--g-tint-strong);
 }
 .toast .ic { color: var(--accent); }
+/* uma linha só, como a pílula do iOS (no iPhone o texto quebrava em 3 linhas e vazava) */
+.toast span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .toast.out { opacity: 0; transform: translateY(16px) scale(.95); transition: all .35s var(--ease); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(24px) scale(.9); } }
 
@@ -566,12 +600,11 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
 .mk .ct { position: absolute; right: -9px; top: -9px; min-width: 24px; height: 24px; border-radius: 12px; padding: 0 6px; background: var(--accent); color: #fff; font: 700 12px/24px var(--font); text-align: center; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
 .mk .tail { position: absolute; left: 50%; bottom: -7px; width: 14px; height: 14px; background: #fff; transform: translateX(-50%) rotate(45deg); border-radius: 2px; z-index: -1; }
 .map-zoom { position: absolute; right: 16px; bottom: 24px; z-index: 500; display: flex; flex-direction: column; border-radius: 22px; padding: 4px; }
+/* iPhone/iPad: com o mapa abaixo da barra de abas, o +/− sobe acima dela */
+html:not([data-size="desktop"]) .map-zoom { bottom: 96px; }
 
 @media (max-width: 860px) {
   :root { --side-w: 240px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 .selecting .tile .badge { right: 32px; }
 
@@ -587,10 +620,10 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
 .glass:hover::before { opacity: 1; }
 :root[data-theme="dark"] .glass::before { background: radial-gradient(160px circle at var(--mx, 50%) var(--my, -40%), rgba(255, 255, 255, .12), transparent 70%); }
 
-/* botões: aperto com mola */
-.gbtn { transition: transform .45s var(--spring), background .2s, color .2s; }
-.gbtn:active { transform: scale(.86); }
-.gbtn:focus-visible, .nav-item:focus-visible, .mi:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* foco pelo teclado: o mesmo anel azul em todo controle (o contorno padrão do Chromium sumia sobre o vidro) */
+:where(button, a, input[type="range"], [role="switch"], [role="button"], [tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* cartões dentro de faixas com rolagem: o anel fica para dentro, senão a faixa corta */
+.hscroll > :focus-visible, .pins > :focus-visible { outline-offset: -3px; }
 
 /* grupos de botões: bolha de vidro que desliza entre eles e o grupo "amassa" ao clicar */
 .lg-group { position: relative; transition: transform .5s var(--spring); }
@@ -629,12 +662,12 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
 .menu .mi kbd { margin-left: auto; padding-left: 14px; font: 500 11.5px var(--font); color: var(--label-2); letter-spacing: .01em; }
 .menu .mi:hover kbd { color: color-mix(in srgb, #fff 75%, transparent); }
 .menu .mi[disabled] { opacity: .35 !important; pointer-events: none; }
-.menu { animation: menu-in .42s var(--spring); }
 
 /* folhas e alertas: saem encolhendo com a mesma mola com que entram */
 .sheet, .alert { transition: opacity .2s, transform .3s var(--ease); }
 
 @media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
   .view-enter, .menu { animation: none; }
   .nav-knob, .lg-group > .hov { transition: none; }
 }
@@ -645,7 +678,7 @@ body:not(.side-off) .tabbar, body:not(.side-off) .search-orb { display: none; }
 #side-scrim { display: none; }
 html.size-switch #sidebar, html.size-switch #main, html.size-switch #side-scrim { transition: none !important; }
 html:not([data-size="desktop"]) #sidebar { z-index: 60; box-shadow: 0 30px 80px rgba(0, 0, 0, .35), var(--g-shadow); --g-tint: color-mix(in srgb, var(--bg-2) 84%, transparent); }
-html:not([data-size="desktop"]) body.side-open #sidebar { transform: none; opacity: 1; pointer-events: auto; }
+html:not([data-size="desktop"]) body.side-open #sidebar { transform: none; opacity: 1; pointer-events: auto; visibility: visible; transition: transform .55s var(--spring), opacity .3s, visibility 0s; }
 html:not([data-size="desktop"]) #side-scrim { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, .28); opacity: 0; pointer-events: none; transition: opacity .3s; }
 html:not([data-size="desktop"]) body.side-open #side-scrim { opacity: 1; pointer-events: auto; }
 
@@ -654,15 +687,35 @@ html[data-size="phone"] #sidebar { left: 0; top: 0; bottom: 0; width: min(330px,
 html[data-size="phone"] #toolbar .pill:has([title^="Diminuir"]) { display: none; }
 html[data-size="phone"] #toolbar { gap: 6px; padding-left: 10px; }
 html[data-size="phone"] .tb-title b { font-size: 20px; }
+/* janela sem moldura no tamanho iPhone: os botões da janela encolhem e "Selecionar" vira ícone,
+   senão sobravam ~20 px para o título ("Outubro de 2026" virava "O.") */
+html.win-frameless[data-size="phone"] { --winctl-w: 96px; }
+html.win-frameless[data-size="phone"] .win-controls.glass button { width: 30px; }
 html.win-frameless[data-size="phone"] #toolbar { padding-right: calc(var(--winctl-w) + 6px); }
+.sel-btn .ic { display: none; }
+html.win-frameless[data-size="phone"] .pill .sel-btn { width: 34px; padding: 0; }
+html.win-frameless[data-size="phone"] .sel-btn .ic { display: block; }
+html.win-frameless[data-size="phone"] .sel-btn span { display: none; }
 /* embaixo: Anos/Meses/Todas numa linha, abas + busca na outra */
 html[data-size="phone"] #bottom {
   height: auto; bottom: 14px; display: grid; grid-template-columns: auto auto; justify-content: center; align-items: center; gap: 10px 10px;
 }
 html[data-size="phone"] #bottom > .seg:not(.tabbar) { grid-column: 1 / -1; justify-self: center; order: -1; }
-html[data-size="phone"] #bottom > .selbar { grid-column: 1 / -1; }
+html[data-size="phone"] #bottom > .selbar { grid-column: 1 / -1; max-width: calc(100vw - 20px); }
+/* 6 botões + contagem não cabiam em 375 px: a barra saía da tela e o texto quebrava em 2 linhas */
+html[data-size="phone"] .selbar { padding: 0 4px; gap: 0; }
+html[data-size="phone"] .selbar .count { min-width: 0; flex: 1; padding: 0 6px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html[data-size="phone"] .selbar .gbtn.round { width: 38px; flex: none; }
+/* a barra inferior tem 2 linhas no iPhone (≈130 px): rodapé da grade, cartões de Anos/Meses e páginas ficavam atrás dela */
+html[data-size="phone"] { --bottom-safe: 180px; }
+/* o aviso sobe acima das duas linhas de barra */
+html[data-size="phone"] .toast { bottom: 140px; }
+/* Ajustes: o segmentado Automático/Claro/Escuro vai para uma linha própria (esmagava o rótulo "Aparência") */
+html[data-size="phone"] .sheet .row:has(> .segsmall) { flex-wrap: wrap; row-gap: 8px; }
+html[data-size="phone"] .sheet .row > .segsmall { flex-basis: 100%; }
+html[data-size="phone"] .sheet .row > .segsmall button { flex: 1; }
 html[data-size="phone"] .tabbar button { width: 104px; }
-html[data-size="phone"] .page { padding: 70px 14px 170px; }
+html[data-size="phone"] .page { padding: 70px 14px var(--bottom-safe); }
 html[data-size="phone"] .page-head h1 { font-size: 30px; }
 html[data-size="phone"] .edge-bottom { height: 180px; }
 html[data-size="phone"] #bottom > .tabbar { justify-self: end; }

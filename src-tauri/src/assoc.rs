@@ -2,7 +2,7 @@
 // O Windows 10/11 não deixa um app se tornar padrão sozinho: registramos as "capacidades" para o Fotos
 // aparecer em Configurações > Aplicativos padrão e no "Abrir com", e o usuário confirma lá.
 
-use crate::scan::{PHOTO_EXT, VIDEO_EXT};
+use crate::scan::{PHOTO_EXT, VIDEO_EXT, VIDEO_PLAYABLE};
 use serde::Serialize;
 use winreg::{enums::*, RegKey};
 
@@ -13,7 +13,23 @@ const PROG_PHOTO: &str = "Fotos.Imagem";
 const PROG_VIDEO: &str = "Fotos.Video";
 const CAPS: &str = r"Software\Fotos\Capabilities";
 
+/// O exe que está rodando é o instalado (%LOCALAPPDATA%\Fotos\fotos.exe)? Builds de teste e cópias
+/// soltas não podem se registrar: o registro passaria a apontar para elas (já apontou para fotos-build).
+pub fn instalado() -> bool {
+    if cfg!(debug_assertions) {
+        return false;
+    }
+    let (Ok(exe), Some(local)) = (std::env::current_exe(), std::env::var_os("LOCALAPPDATA")) else {
+        return false;
+    };
+    let esperado = std::path::Path::new(&local).join("Fotos").join("fotos.exe");
+    exe.to_string_lossy().to_lowercase() == esperado.to_string_lossy().to_lowercase()
+}
+
 pub fn register() -> std::io::Result<()> {
+    if !instalado() {
+        return Ok(());
+    }
     let exe = std::env::current_exe()?;
     let exe = exe.to_string_lossy();
     let open = format!("\"{exe}\" \"%1\"");
@@ -42,12 +58,22 @@ pub fn register() -> std::io::Result<()> {
     caps.set_value("ApplicationIcon", &format!("\"{exe}\",0"))?;
     let (fa, _) = caps.create_subkey("FileAssociations")?;
 
-    for (exts, prog) in [(PHOTO_EXT, PROG_PHOTO), (VIDEO_EXT, PROG_VIDEO)] {
+    for (exts, prog) in [(PHOTO_EXT, PROG_PHOTO), (VIDEO_PLAYABLE, PROG_VIDEO)] {
         for e in exts {
             let ext = format!(".{e}");
             fa.set_value(&ext, &prog)?;
             types.set_value(&ext, &"")?;
             classes.create_subkey(format!(r"{ext}\OpenWithProgids"))?.0.set_value(prog, &"")?;
+        }
+    }
+    // Vídeos que o WebView2 não toca (MKV, AVI, WMV…) saem do registro: o Fotos só mostraria
+    // "Abrir no Player", que abriria o Fotos de novo. As versões até a 1.1.3 registravam todos.
+    for e in VIDEO_EXT.iter().filter(|e| !VIDEO_PLAYABLE.contains(e)) {
+        let ext = format!(".{e}");
+        let _ = fa.delete_value(&ext);
+        let _ = types.delete_value(&ext);
+        if let Ok(k) = classes.open_subkey_with_flags(format!(r"{ext}\OpenWithProgids"), KEY_ALL_ACCESS) {
+            let _ = k.delete_value(PROG_VIDEO);
         }
     }
     let (reg, _) = hkcu.create_subkey(r"Software\RegisteredApplications")?;
@@ -70,13 +96,20 @@ pub struct Status {
 
 /// O Fotos é o padrão hoje? (olha a escolha do usuário para .jpg e .mp4)
 pub fn status() -> Status {
-    let choice = |ext: &str| {
-        RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey(format!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoice"))
-            .and_then(|k| k.get_value::<String, _>("ProgId"))
-            .unwrap_or_default()
-    };
-    Status { photos: choice(".jpg") == PROG_PHOTO, videos: choice(".mp4") == PROG_VIDEO }
+    Status { photos: user_choice(".jpg") == PROG_PHOTO, videos: user_choice(".mp4") == PROG_VIDEO }
+}
+
+fn user_choice(ext: &str) -> String {
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(format!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext}\UserChoice"))
+        .and_then(|k| k.get_value::<String, _>("ProgId"))
+        .unwrap_or_default()
+}
+
+/// O app padrão desta extensão é o próprio Fotos? ("Abrir com o App Padrão" o reabriria.)
+pub fn padrao_e_fotos(ext: &str) -> bool {
+    let p = user_choice(&format!(".{ext}")).to_lowercase();
+    p == PROG_PHOTO.to_lowercase() || p == PROG_VIDEO.to_lowercase() || p.ends_with("fotos.exe")
 }
 
 /// Abre Configurações > Aplicativos padrão já na página do Fotos.

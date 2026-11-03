@@ -1,9 +1,9 @@
 // Fotos — casca do app: barra lateral, barra superior/inferior, rotas e as telas da biblioteca.
 
 import { api, native, thumbUrl } from './api.js';
-import { $, h, icon, fmt, nf, norm, debounce, MESES } from './util.js';
+import { $, h, icon, fmt, nf, norm, plural, debounce, MESES } from './util.js';
 import {
-  S, save, flushSave, onChange, loadData, setItems, library, SETS, MEDIA_TYPES, UTILITIES, setItemsFor, months, years, recentDays,
+  S, save, saveQuiet, flushSave, onChange, loadData, setItems, library, SETS, MEDIA_TYPES, UTILITIES, setItemsFor, months, years, recentDays,
   keyPhoto, memories, trips, albumById, albumItems, search, suggestions, toggleFav, setHidden, softDelete, recover,
   createAlbum, addToAlbum, removeFromAlbum, purgeOld, dropRefs, isFav, editV, isDeleted, isHidden, featured, placeLabel,
   resolvePlace, rangeLabel, duplicates, derive,
@@ -22,6 +22,11 @@ const R = {
   sel: new Set(),
   unlocked: false,
   cleanup: [],
+  title: ['', ''], // título da barra superior: sobrevive ao renderChrome
+  tbFade: false, // telas com título grande: o pequeno da barra só aparece depois de rolar
+  head: null, // { title, sub } da grade atual, para atualizar as contagens depois de um save
+  preSearch: null, // rota de onde a busca saiu (Esc volta para ela)
+  libMode: 'all',
 };
 window.__fotos = { R, S };
 
@@ -78,24 +83,33 @@ function applySize(first) {
   requestAnimationFrame(() => requestAnimationFrame(() => html.classList.remove('size-switch')));
   html.dataset.size = sz;
   document.body.classList.remove('side-open');
-  document.body.classList.toggle('side-off', sz !== 'desktop');
+  // no desktop, respeita a barra lateral que a pessoa ocultou
+  document.body.classList.toggle('side-off', sz !== 'desktop' || !!S.data.settings.sideOff);
   if (!first) renderChrome();
 }
 addEventListener('resize', () => applySize(false));
 $('#side-scrim').onclick = () => document.body.classList.remove('side-open');
 function toggleSidebar() {
   if (compact()) return document.body.classList.toggle('side-open');
-  document.body.classList.toggle('side-off');
+  S.data.settings.sideOff = document.body.classList.toggle('side-off');
+  saveQuiet();
   renderChrome();
 }
 
 // ============ navegação ============
 export function go(route, push = false) {
+  if (route.view === 'search' && R.route.view !== 'search') R.preSearch = R.route;
   if (push) R.back.push({ route: R.route, scroll: view.querySelector('.scroller')?.scrollTop });
   else R.back = [];
   endSelect(false);
+  relockIfLeaving(route);
   R.route = route;
-  document.body.classList.remove('side-open');
+  if (route.view === 'library') R.libMode = route.mode || 'all';
+  // na busca, a barra lateral (onde fica o campo) continua aberta no phone/tablet: fechar escondia o que se digita
+  if (route.view !== 'search') {
+    document.body.classList.remove('side-open');
+    if (searchInput.value) searchInput.value = '';
+  }
   renderView();
   renderNav();
 }
@@ -103,6 +117,7 @@ function goBack() {
   const b = R.back.pop();
   if (!b) return;
   endSelect(false);
+  relockIfLeaving(b.route);
   R.route = b.route;
   renderView(b.scroll);
   renderNav();
@@ -111,8 +126,11 @@ function goBack() {
 const sameRoute = (a, b) => a.view === b.view && (a.key ?? a.id ?? a.path ?? '') === (b.key ?? b.id ?? b.path ?? '');
 
 // ============ barra lateral ============
+let navActiveDone = false;
 function navItem(ic, label, route, count) {
-  const active = sameRoute(R.route, route) || (route.view === 'library' && R.route.view === 'library');
+  // Mapa e Vídeos aparecem em duas seções: só o primeiro fica destacado (a bolha não pula)
+  const active = !navActiveDone && (sameRoute(R.route, route) || (route.view === 'library' && R.route.view === 'library'));
+  if (active) navActiveDone = true;
   return h('button.nav-item' + (active ? '.active' : ''), { onclick: () => go(route), oncontextmenu: e => navContext(e, route) },
     icon(ic), h('span.lbl', label), count != null ? h('span.cnt', nf.format(count)) : null);
 }
@@ -122,7 +140,9 @@ function navSection(id, title, kids, extra) {
     h('div.nav-head', h('span', title), h('span', { style: { display: 'flex', gap: '2px' } }, extra,
       h('button.chev', { title: collapsed ? 'Expandir' : 'Recolher', onclick: () => {
         S.data.settings.collapsed = { ...(S.data.settings.collapsed || {}), [id]: !collapsed };
-        save();
+        // só a barra lateral muda: save() com emit refazia a grade e as telas inteiras
+        saveQuiet();
+        renderNav();
       } }, icon('down')))),
     h('div.nav-list', kids));
   return sec;
@@ -140,6 +160,7 @@ function pinnedEntry(k) {
 function renderNav() {
   const nav = $('#nav');
   const st = nav.scrollTop;
+  navActiveDone = false;
   nav.replaceChildren(
     h('div.nav-list', navItem('library', 'Biblioteca', { view: 'library', mode: R.route.mode || 'all' }), navItem('collections', 'Coleções', { view: 'collections' })),
     navSection('pinned', 'Fixados', S.data.pinned.map(pinnedEntry).filter(Boolean).map(p => navItem(p.ic, p.label, p.route))),
@@ -153,12 +174,15 @@ function renderNav() {
     navSection('albums', 'Álbuns', S.data.albums.map(a => navItem('album', a.name, { view: 'album', id: a.id })),
       h('button', { title: 'Novo álbum', onclick: () => newAlbum() }, icon('plus'))),
     navSection('types', 'Tipos de Mídia', MEDIA_TYPES.map(k => [k, SETS[k].get().length]).filter(([, n]) => n).map(([k, n]) => navItem(SETS[k].icon, SETS[k].title, { view: 'set', key: k }, n))),
-    navSection('utils', 'Utilidades', UTILITIES.map(k => navItem(SETS[k].icon, SETS[k].title, { view: 'set', key: k }, SETS[k].locked ? null : SETS[k].get().length))),
+    navSection('utils', 'Utilidades', visibleUtilities().map(k => navItem(SETS[k].icon, SETS[k].title, { view: 'set', key: k }, SETS[k].locked ? null : SETS[k].get().length))),
     navSection('folders', 'Pastas', S.data.folders.map(f => navItem('folder', f.split('\\').filter(Boolean).pop() || f, { view: 'folder', path: f })),
       h('button', { title: 'Adicionar pasta', onclick: addFolder }, icon('plus'))),
   );
   nav.scrollTop = st;
 }
+
+// como no iOS: Importações e Duplicados só aparecem quando têm algo (os trancados sempre)
+const visibleUtilities = () => UTILITIES.filter(k => SETS[k].locked || SETS[k].get().length || (R.route.view === 'set' && R.route.key === k));
 
 function navContext(e, route) {
   e.preventDefault();
@@ -176,7 +200,7 @@ function navContext(e, route) {
     const key = route.view === 'map' ? 'map' : route.key;
     items.push({ label: S.data.pinned.includes(key) ? 'Desafixar' : 'Fixar em Coleções', icon: 'pin', run: () => togglePin(key) });
   } else if (route.view === 'folder') {
-    items.push({ label: 'Mostrar no Explorador', icon: 'explorer', run: () => api.openPath(route.path) },
+    items.push({ label: 'Mostrar no Explorador', icon: 'explorer', run: () => openFolder(route.path) },
       { label: 'Remover da Biblioteca', icon: 'minus', danger: true, run: () => removeFolder(route.path) });
   } else return;
   menu(items, { x: e.clientX, y: e.clientY });
@@ -189,11 +213,22 @@ function togglePin(key) {
 
 // ============ barra superior / inferior ============
 function setTitle(title, sub) {
+  R.title = [title || '', sub || ''];
   const t = toolbar.querySelector('.tb-title');
   if (!t) return;
-  t.firstChild.textContent = title;
-  t.lastChild.textContent = sub || '';
+  t.firstChild.textContent = R.title[0];
+  t.lastChild.textContent = R.title[1];
 }
+/** título pequeno da barra: some inteiro (título e subtítulo) enquanto o grande está à vista */
+function tbFade(hide) {
+  R.tbFade = hide;
+  const t = toolbar.querySelector('.tb-title');
+  if (t) t.style.opacity = hide ? 0 : 1;
+}
+
+// open_path deixou de existir: pasta → openFolder, link https → openUrl (com recuo para o api.js antigo)
+const openFolder = p => api.openFolder?.(p) ?? api.openPath?.(p);
+const openUrl = u => api.openUrl?.(u) ?? api.openPath?.(u);
 
 function renderChrome() {
   const r = R.route;
@@ -202,18 +237,19 @@ function renderChrome() {
     left.push(h('div.pill.glass', h('button.gbtn.round', { title: 'Mostrar barra lateral', onclick: toggleSidebar }, icon('sidebar'))));
   }
   if (R.back.length) left.push(h('div.pill.glass', h('button.gbtn.round', { title: 'Voltar', onclick: goBack }, icon('back'))));
-  const title = h('div.tb-title', h('b', ''), h('span', ''));
+  const title = h('div.tb-title', { style: { opacity: R.tbFade ? 0 : 1 } }, h('b', R.title[0]), h('span', R.title[1]));
   const right = [];
   const isGrid = !!R.grid;
   if (R.selecting) {
-    right.push(h('div.pill.glass', h('button.gbtn', { onclick: selectAll }, R.sel.size && R.sel.size === R.grid?.items.length ? 'Desmarcar Tudo' : 'Selecionar Tudo')),
-      h('div.pill.glass', h('button.gbtn', { onclick: () => endSelect() }, 'OK')));
+    right.push(h('div.pill.glass', h('button.gbtn.sel-all', { onclick: () => selectAll() }, R.sel.size && R.sel.size === R.grid?.items.length ? 'Desmarcar Tudo' : 'Selecionar Tudo')),
+      h('div.pill.glass', h('button.gbtn', { onclick: () => endSelect() }, 'Cancelar')));
   } else {
     if (isGrid) {
       right.push(h('div.pill.glass',
-        h('button.gbtn.round', { title: 'Diminuir (Ctrl −)', onclick: () => zoom(-1) }, icon('zoomOut')),
-        h('button.gbtn.round', { title: 'Aumentar (Ctrl +)', onclick: () => zoom(1) }, icon('zoomIn'))));
-      right.push(h('div.pill.glass', h('button.gbtn', { onclick: startSelect }, 'Selecionar')));
+        // zoom(+1) = mais colunas = fotos menores, igual aos atalhos Ctrl − / Ctrl +
+        h('button.gbtn.round', { title: 'Diminuir (Ctrl −)', onclick: () => zoom(1) }, icon('zoomOut')),
+        h('button.gbtn.round', { title: 'Aumentar (Ctrl +)', onclick: () => zoom(-1) }, icon('zoomIn'))));
+      right.push(h('div.pill.glass', h('button.gbtn.sel-btn', { title: 'Selecionar', onclick: startSelect }, icon('selectCircle'), h('span', 'Selecionar'))));
     }
     right.push(h('div.pill.glass', h('button.gbtn.round', { title: 'Mais', onclick: e => moreMenu(e.currentTarget) }, icon('more'))));
   }
@@ -225,8 +261,9 @@ function renderChrome() {
   else {
     if (r.view === 'library') b.push(segmented([{ value: 'years', label: 'Anos' }, { value: 'months', label: 'Meses' }, { value: 'all', label: 'Todas' }], r.mode, mode => go({ view: 'library', mode })));
     if (document.body.classList.contains('side-off')) {
+      // a aba Biblioteca volta ao modo em que a pessoa estava (Anos/Meses/Todas)
       b.unshift(segmented([{ value: 'library', label: 'Biblioteca', icon: 'library' }, { value: 'collections', label: 'Coleções', icon: 'collections' }],
-        r.view === 'library' ? 'library' : r.view === 'collections' ? 'collections' : '', v => go(v === 'library' ? { view: 'library', mode: 'all' } : { view: 'collections' }), 'tabbar'));
+        r.view === 'library' ? 'library' : r.view === 'collections' ? 'collections' : '', v => go(v === 'library' ? { view: 'library', mode: R.libMode } : { view: 'collections' }), 'tabbar'));
       b.push(h('button.search-orb.glass.lift', { title: 'Buscar', onclick: openSearch }, icon('search')));
     }
   }
@@ -247,7 +284,7 @@ function moreMenu(anchor) {
       { label: 'Apagar Álbum', icon: 'trash', danger: true, run: () => deleteAlbum(a) });
   }
   if (r.view === 'set' && r.key === 'deleted' && R.grid?.items.length) {
-    items.push('-', { label: 'Recuperar Tudo', icon: 'restore', run: () => recover(R.grid.items.map(i => i.id)) },
+    items.push('-', { label: 'Recuperar Tudo', icon: 'restore', run: () => recoverAll(R.grid.items.map(i => i.id)) },
       { label: 'Apagar Tudo', icon: 'trash', danger: true, run: () => deleteForever(R.grid.items.map(i => i.id)) });
   }
   if (R.grid?.items.length && r.view !== 'set') items.push({ label: 'Apresentação', icon: 'slideshow', run: () => playMemory({ title: currentTitle(), items: R.grid.items.slice(-60) }) });
@@ -257,6 +294,13 @@ function moreMenu(anchor) {
     { label: 'Definir como App Padrão…', icon: 'photos', run: setAsDefault },
     { label: 'Ajustes…', icon: 'gear', run: settings });
   menu(items, anchor);
+}
+
+// como no iOS, Recuperar Tudo pede confirmação
+async function recoverAll(ids) {
+  if (!(await confirmBox(`Recuperar ${plural(ids.length, 'item', 'itens')}?`, 'Eles voltam para a biblioteca.', 'Recuperar', false))) return;
+  recover(ids);
+  toast(plural(ids.length, 'item recuperado', 'itens recuperados'), 'restore');
 }
 
 function currentTitle() {
@@ -271,10 +315,14 @@ function colsFor(width, z) {
   return Math.max(1, Math.round(width / ZOOM[Math.max(0, Math.min(ZOOM.length - 1, z))]));
 }
 function zoom(d) {
+  // sem grade na tela (Coleções, Anos, Meses), o zoom mudava escondido e redesenhava a tela à toa
+  if (!R.grid) return;
   const s = S.data.settings;
-  s.zoom = Math.max(0, Math.min(ZOOM.length - 1, s.zoom + d));
-  save();
-  R.grid?.setCols(colsFor(R.grid.host.clientWidth, s.zoom));
+  const z = Math.max(0, Math.min(ZOOM.length - 1, s.zoom + d));
+  if (z === s.zoom) return;
+  s.zoom = z;
+  saveQuiet();
+  R.grid.setCols(colsFor(R.grid.host.clientWidth, s.zoom));
 }
 let wheelAcc = 0;
 view.addEventListener('wheel', e => {
@@ -302,39 +350,84 @@ function endSelect(redraw = true) {
   R.grid?.syncSelection();
   if (redraw) renderChrome();
 }
-function selectAll() {
+/** `toggle`: o botão alterna; o Ctrl+A sempre seleciona tudo (como no Windows e no macOS) */
+function selectAll(toggle = true) {
   if (!R.grid) return;
-  if (R.sel.size === R.grid.items.length) R.sel.clear();
+  if (toggle && R.sel.size === R.grid.items.length) R.sel.clear();
   else R.grid.items.forEach(i => R.sel.add(i.id));
   R.grid.syncSelection();
-  renderChrome();
+  onSel();
 }
 function onSel() {
   if (!R.selecting) {
     R.selecting = true;
     view.classList.add('selecting');
+    return renderChrome();
   }
-  renderChrome();
+  // a barra já existe: só atualiza contagem e botões (recriar fazia a animação de entrada tocar a cada clique)
+  const bar = bottom.querySelector('.selbar');
+  if (!bar) return renderChrome();
+  updateSelBar(bar);
+}
+
+/** "1 Foto Selecionada", "3 Vídeos Selecionados", "5 Itens Selecionados" (como no iOS) */
+function selLabel(ids) {
+  const n = ids.length;
+  if (!n) return 'Selecione itens';
+  const its = ids.map(id => S.byId.get(id)).filter(Boolean);
+  const [um, varios] = its.length && its.every(i => i.video) ? ['Vídeo Selecionado', 'Vídeos Selecionados']
+    : its.length && its.every(i => !i.video) ? ['Foto Selecionada', 'Fotos Selecionadas'] : ['Item Selecionado', 'Itens Selecionados'];
+  return plural(n, um, varios);
+}
+
+function updateSelBar(bar) {
+  const ids = [...R.sel];
+  const none = !ids.length;
+  bar.querySelector('.count').textContent = selLabel(ids);
+  bar.querySelectorAll('button').forEach(b => (b.disabled = none));
+  const fb = bar.querySelector('.fav-btn');
+  if (fb) {
+    const allFav = !none && ids.every(id => S.data.favorites[id]);
+    fb.title = allFav ? 'Desfavoritar' : 'Favoritar';
+    fb.replaceChildren(icon(allFav ? 'heartFill' : 'heart'));
+  }
+  const sa = toolbar.querySelector('.sel-all');
+  if (sa) sa.textContent = R.sel.size && R.sel.size === R.grid?.items.length ? 'Desmarcar Tudo' : 'Selecionar Tudo';
 }
 
 function selBar() {
-  const ids = [...R.sel];
-  const n = ids.length;
+  // os botões leem R.sel na hora do clique: a barra não é mais recriada a cada item marcado
+  const ids = () => [...R.sel];
   const r = R.route;
-  const none = !n;
-  const count = h('div.count', n ? `${fmt.items(n)} selecionado${n > 1 ? 's' : ''}` : 'Selecione itens');
+  const count = h('div.count');
+  let bar;
   if (r.view === 'set' && r.key === 'deleted') {
-    return h('div.selbar.glass', h('button.gbtn', { disabled: none, onclick: () => { recover(ids); endSelect(); } }, 'Recuperar'), count,
-      h('button.gbtn.danger', { disabled: none, onclick: () => deleteForever(ids) }, 'Apagar'));
+    bar = h('div.selbar.glass', h('button.gbtn', { onclick: () => { recover(ids()); endSelect(); } }, 'Recuperar'), count,
+      h('button.gbtn.danger', { onclick: () => deleteForever(ids()) }, 'Apagar'));
+  } else {
+    bar = h('div.selbar.glass',
+      h('button.gbtn.round', { title: 'Exportar', onclick: () => exportItems(ids()) }, icon('share')),
+      h('button.gbtn.round.fav-btn', { onclick: () => { const x = ids(); toggleFav(x, !x.every(id => S.data.favorites[id])); R.grid.refresh(); updateSelBar(bar); } }),
+      count,
+      h('button.gbtn.round', { title: 'Adicionar ao Álbum', onclick: () => pickAlbum(ids()) }, icon('album')),
+      h('button.gbtn.round', { title: 'Mais', onclick: e => menu(selMenu(ids()), e.currentTarget) }, icon('more')),
+      h('button.gbtn.round.danger', { title: 'Apagar', onclick: () => trashFromBar(ids()) }, icon('trash')));
   }
-  const allFav = n && ids.every(id => S.data.favorites[id]);
-  return h('div.selbar.glass',
-    h('button.gbtn.round', { title: 'Exportar', disabled: none, onclick: () => exportItems(ids) }, icon('share')),
-    h('button.gbtn.round', { title: allFav ? 'Desfavoritar' : 'Favoritar', disabled: none, onclick: () => { toggleFav(ids, !allFav); R.grid.refresh(); renderChrome(); } }, icon(allFav ? 'heartFill' : 'heart')),
-    count,
-    h('button.gbtn.round', { title: 'Adicionar ao Álbum', disabled: none, onclick: () => pickAlbum(ids) }, icon('album')),
-    h('button.gbtn.round', { title: 'Mais', disabled: none, onclick: e => menu(selMenu(ids), e.currentTarget) }, icon('more')),
-    h('button.gbtn.round.danger', { title: 'Apagar', disabled: none, onclick: () => deleteItems(ids) }, icon('trash')));
+  updateSelBar(bar);
+  return bar;
+}
+
+/** num álbum, a lixeira pergunta como no iOS: tirar só do álbum ou apagar da biblioteca */
+async function trashFromBar(ids) {
+  const r = R.route;
+  if (r.view !== 'album') return deleteItems(ids);
+  const i = await alertBox({
+    title: ids.length === 1 ? 'Remover este item?' : `Remover ${plural(ids.length, 'item', 'itens')}?`,
+    message: 'Remover do Álbum mantém o item na biblioteca. Apagar leva para Apagados Recentemente.',
+    buttons: [{ label: 'Cancelar' }, { label: 'Remover do Álbum', primary: true }, { label: 'Apagar', destructive: true }],
+  });
+  if (i === 1) { removeFromAlbum(r.id, ids); endSelect(); }
+  else if (i === 2) deleteItems(ids);
 }
 
 function selMenu(ids) {
@@ -342,25 +435,46 @@ function selMenu(ids) {
   const hidden = r.view === 'set' && r.key === 'hidden';
   return [
     r.view === 'album' && { label: 'Remover do Álbum', icon: 'minus', run: () => { removeFromAlbum(r.id, ids); endSelect(); } },
-    { label: hidden ? 'Reexibir' : 'Ocultar', icon: 'hidden', run: () => { setHidden(ids, !hidden); endSelect(); toast(hidden ? 'Reexibido' : `${fmt.items(ids.length)} ocultado${ids.length > 1 ? 's' : ''}`, 'hidden'); } },
+    { label: hidden ? 'Reexibir' : 'Ocultar', icon: 'hidden', run: () => { setHidden(ids, !hidden); endSelect(); toast(hidden ? plural(ids.length, 'item reexibido', 'itens reexibidos') : plural(ids.length, 'item ocultado', 'itens ocultados'), 'hidden'); } },
     { label: 'Novo Álbum com Seleção', icon: 'plus', run: () => newAlbum(ids) },
     { label: 'Apresentação', icon: 'slideshow', run: () => playMemory({ title: fmt.items(ids.length), items: ids.map(id => S.byId.get(id)) }) },
   ];
 }
 
 // ============ ações ============
+/** resolve com true quando os itens saíram da lista atual (o visualizador usa para avançar) */
 export async function deleteItems(ids) {
   const n = ids.length;
-  const ok = await confirmBox(n === 1 ? 'Apagar este item?' : `Apagar ${n} itens?`, 'Os itens ficarão em Apagados Recentemente por 30 dias. Depois disso, vão para a Lixeira do Windows.', n === 1 ? 'Apagar Foto' : `Apagar ${n} Itens`);
+  // já estão em Apagados: apagar de novo reiniciava o prazo de 30 dias. Oferece Recuperar ou Apagar Agora.
+  if (n && ids.every(id => S.data.deleted[id])) return deletedChoice(ids);
+  const first = S.byId.get(ids[0]);
+  const okLabel = n === 1 ? (first?.video ? 'Apagar Vídeo' : 'Apagar Foto') : `Apagar ${n} Itens`;
+  const what = n === 1 ? (first?.video ? 'Este vídeo ficará' : 'Esta foto ficará') : 'Os itens ficarão';
+  const ok = await confirmBox(n === 1 ? 'Apagar este item?' : `Apagar ${n} itens?`, `${what} em Apagados Recentemente por 30 dias. Depois disso, ${n === 1 ? 'vai' : 'vão'} para a Lixeira do Windows.`, okLabel);
   if (!ok) return false;
   softDelete(ids);
   endSelect();
-  toast(n === 1 ? 'Movido para Apagados Recentemente' : `${n} itens movidos para Apagados`, 'trash');
+  toast(n === 1 ? 'Movido para Apagados Recentemente' : `${n} itens movidos para Apagados Recentemente`, 'trash');
   return true;
 }
-async function deleteForever(ids) {
+async function deletedChoice(ids) {
   const n = ids.length;
-  if (!(await confirmBox(n === 1 ? 'Apagar este item agora?' : `Apagar ${n} itens agora?`, 'Os arquivos serão movidos para a Lixeira do Windows.', 'Apagar'))) return;
+  const i = await alertBox({
+    title: n === 1 ? 'Este item já está em Apagados Recentemente' : `${n} itens já estão em Apagados Recentemente`,
+    message: 'Recupere para a biblioteca ou apague agora (vai para a Lixeira do Windows).',
+    buttons: [{ label: 'Cancelar' }, { label: 'Recuperar', primary: true }, { label: 'Apagar Agora', destructive: true }],
+  });
+  if (i === 1) {
+    recover(ids);
+    endSelect();
+    toast(plural(n, 'item recuperado', 'itens recuperados'), 'restore');
+    return true;
+  }
+  return i === 2 ? deleteForever(ids, true) : false;
+}
+async function deleteForever(ids, confirmed = false) {
+  const n = ids.length;
+  if (!confirmed && !(await confirmBox(n === 1 ? 'Apagar este item agora?' : `Apagar ${n} itens agora?`, 'Os arquivos serão movidos para a Lixeira do Windows.', 'Apagar'))) return false;
   try {
     await api.trash(ids);
     for (const id of ids) dropRefs(id);
@@ -368,9 +482,11 @@ async function deleteForever(ids) {
     ids.forEach(id => S.byId.delete(id));
     save(true);
     endSelect();
-    toast('Movido para a Lixeira do Windows', 'trash');
+    toast(n === 1 ? 'Movido para a Lixeira do Windows' : `${n} itens movidos para a Lixeira do Windows`, 'trash');
+    return true;
   } catch (e) {
     alertBox({ title: 'Não foi possível apagar', message: String(e) });
+    return false;
   }
 }
 export async function exportItems(ids) {
@@ -465,11 +581,17 @@ async function importFolder() {
 }
 async function importPaths(paths) {
   if (!native || !S.data.folders.length) return;
-  showProgress(0, 0);
   try {
+    // conta antes: o que já está na biblioteca é ignorado, e muita coisa pede confirmação
+    const [total, bytes] = await api.importPreview(paths, S.data.folders[0]);
+    if (!total) return toast('Nada para importar: já está na biblioteca', 'import');
+    if ((total > 200 || bytes > 2 * 1024 ** 3) && !(await confirmBox(`Importar ${fmt.items(total)}?`, `São ${fmt.bytes(bytes)}. Eles serão copiados para a pasta Importados.`, 'Importar', false))) return;
+    showProgress(0, 0);
     const n = await api.importPaths(paths, S.data.folders[0]);
     toast(n ? `${fmt.items(n)} importado${n > 1 ? 's' : ''}` : 'Nada para importar', 'import');
     if (n) await rescan(true);
+  } catch (e) {
+    alertBox({ title: 'Não foi possível importar', message: String(e) });
   } finally {
     hideProgress();
   }
@@ -498,7 +620,7 @@ function settings() {
         h('div.row', icon('location'), h('span.lbl', 'Nomes de lugares (OpenStreetMap)'), switchEl(st.places, v => { st.places = v; save(); })),
         h('div.row', icon('aspect'), h('span.lbl', 'Mostrar proporção original na grade'), switchEl(st.aspect, v => { st.aspect = v; save(); R.grid?.setAspect(v); }))),
       h('div.foot', h('button.gbtn.accent', { onclick: close }, 'OK')),
-      h('p.credit', 'Fotos · Criado pela ', h('a', { href: '#', onclick: e => { e.preventDefault(); api.openPath('https://devlumo.com.br'); } }, 'DevLumo')));
+      h('p.credit', 'Fotos · Criado pela ', h('a', { href: '#', onclick: e => { e.preventDefault(); openUrl('https://devlumo.com.br'); } }, 'DevLumo')));
   });
 }
 
@@ -529,7 +651,8 @@ async function openFromPath(path) {
     if (!items.length) return;
     derive(items);
     // usa o mesmo objeto da biblioteca quando a foto já está nela (favoritos, edições…)
-    const list = items.map(i => S.byId.get(i.id) || i);
+    // fora da biblioteca: o visualizador desativa favoritar/ocultar/álbum e "Apagar" vai direto para a Lixeira
+    const list = items.map(i => S.byId.get(i.id) || Object.assign(i, { external: true }));
     openViewer(list, index, {});
   } catch (e) {
     alertBox({ title: 'Não foi possível abrir', message: String(e) });
@@ -543,15 +666,29 @@ function openSearch() {
   setTimeout(() => $('#search').focus(), 60);
 }
 const searchInput = $('#search');
+/** sai da busca para a tela de onde ela foi aberta (não sempre para a Biblioteca) */
+function leaveSearch() {
+  const back = R.preSearch && R.preSearch.view !== 'search' ? R.preSearch : { view: 'library', mode: R.libMode };
+  R.preSearch = null;
+  go(back);
+}
 searchInput.addEventListener('input', debounce(() => {
   const q = searchInput.value.trim();
   if (q) {
     if (R.route.view === 'search') { R.route.q = q; renderView(); }
     else go({ view: 'search', q });
-  } else if (R.route.view === 'search') go({ view: 'library', mode: 'all' });
+  } else if (R.route.view === 'search') leaveSearch();
 }, 180));
 searchInput.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { searchInput.value = ''; searchInput.dispatchEvent(new Event('input')); searchInput.blur(); }
+  if (e.key === 'Escape') {
+    searchInput.value = '';
+    searchInput.blur();
+    if (R.route.view === 'search') leaveSearch();
+  } else if (e.key === 'Enter' && compact()) {
+    // phone/tablet: Enter fecha a barra lateral para mostrar os resultados
+    searchInput.blur();
+    document.body.classList.remove('side-open');
+  }
 });
 
 // ============ telas ============
@@ -560,6 +697,9 @@ function clearView() {
   R.cleanup = [];
   R.grid?.destroy();
   R.grid = null;
+  R.head = null;
+  R.title = ['', ''];
+  R.tbFade = false;
   view.replaceChildren();
   mainEl.classList.remove('scrolled');
 }
@@ -596,22 +736,22 @@ async function renderView(restoreScroll) {
     if (s.locked && S.data.settings.hello && !R.unlocked) return lockedView(s);
     const items = s.get();
     return gridView({
-      items, title: s.title, sub: fmt.count(items.filter(i => !i.video).length, items.filter(i => i.video).length), restoreScroll,
-      badge: r.key === 'deleted' ? it => { const d = 30 - Math.floor((Date.now() - S.data.deleted[it.id]) / 864e5); return `${Math.max(0, d)} dia${d === 1 ? '' : 's'}`; } : null,
+      items, title: s.title, sub: countSub, restoreScroll,
+      badge: r.key === 'deleted' ? it => { const d = Math.max(0, 30 - Math.floor((Date.now() - S.data.deleted[it.id]) / 864e5)); return plural(d, 'dia', 'dias'); } : null,
       empty: r.key === 'deleted' ? ['trash', 'Nenhum Item Apagado', 'Fotos e vídeos apagados ficam aqui por 30 dias.'] : r.key === 'favorites' ? ['heart', 'Nenhum Favorito', 'Toque no coração de uma foto para vê-la aqui.'] : r.key === 'duplicates' ? ['duplicate', 'Nenhum Duplicado', 'Nenhuma cópia exata foi encontrada.'] : null,
-      sub2: r.key === 'duplicates' ? `${duplicates().length} grupos de cópias exatas (mesmo tamanho, dimensões e horário).` : null,
+      sub2: r.key === 'duplicates' ? `${plural(duplicates().length, 'grupo', 'grupos')} de cópias exatas (mesmo tamanho, dimensões e horário).` : null,
     });
   }
   if (r.view === 'album') {
     const a = albumById(r.id);
     if (!a) return go({ view: 'collections' });
     const items = albumItems(a);
-    return gridView({ items, title: a.name, sub: fmt.count(items.filter(i => !i.video).length, items.filter(i => i.video).length), restoreScroll, empty: ['album', 'Álbum Vazio', 'Selecione fotos na biblioteca e escolha “Adicionar ao Álbum”.'] });
+    return gridView({ items, title: a.name, sub: countSub, restoreScroll, empty: ['album', 'Álbum Vazio', 'Selecione fotos na biblioteca e escolha “Adicionar ao Álbum”.'] });
   }
   if (r.view === 'day') {
     const items = library().filter(i => i.day === r.key);
     const d = new Date(items[0]?.t || Date.now());
-    return gridView({ items, title: fmt.relDay(d), sub: `${fmt.day(d)} · ${fmt.items(items.length)}`, restoreScroll, newestLast: true });
+    return gridView({ items, title: fmt.relDay(d), sub: list => `${fmt.day(d)} · ${fmt.items(list.length)}`, restoreScroll, newestLast: true });
   }
   if (r.view === 'trip') {
     const t = trips().find(t => t.id === r.id);
@@ -619,8 +759,7 @@ async function renderView(restoreScroll) {
     return gridView({ items: t.items, title: placeLabel(t.center) || 'Viagem', sub: rangeLabel(t.date, t.end), restoreScroll, newestLast: true, memory: { title: placeLabel(t.center) || 'Viagem', subtitle: rangeLabel(t.date, t.end), items: t.items } });
   }
   if (r.view === 'folder') {
-    const p = norm(r.path);
-    const items = library().filter(i => norm(i.path).startsWith(p));
+    const items = folderItems(r.path);
     return gridView({ items, title: r.path.split('\\').filter(Boolean).pop(), sub: r.path, restoreScroll });
   }
   if (r.view === 'search') return searchView();
@@ -635,19 +774,48 @@ async function renderView(restoreScroll) {
   }
 }
 
+/** contagem "N Fotos, M Vídeos" calculada da lista atual (o cabeçalho acompanha os saves) */
+const countSub = list => fmt.count(list.filter(i => !i.video).length, list.filter(i => i.video).length);
+
+/** itens de uma pasta; o separador no fim evita pegar pastas "irmãs" (C:\Fotos 2 em C:\Fotos) */
+function folderItems(path) {
+  const p = norm(path.replace(/[\\/]*$/, '\\'));
+  return library().filter(i => norm(i.path).startsWith(p));
+}
+
 function lockedView(s) {
   setTitle(s.title, '');
-  view.append(h('div.empty.locked', h('div.box', icon('lock'), h('h2', `${s.title} está bloqueado`), h('p', 'Use o Windows Hello para ver este álbum.'),
-    h('button.gbtn.accent', { onclick: unlock }, 'Ver Álbum'))));
+  // Ocultos é um álbum no iOS; Apagados Recentemente não
+  const album = s === SETS.hidden;
+  view.append(h('div.empty.locked', h('div.box', icon('lock'), h('h2', `${s.title} está bloqueado`), h('p', album ? 'Use o Windows Hello para ver este álbum.' : `Use o Windows Hello para ver ${s.title}.`),
+    h('button.gbtn.accent', { onclick: unlock }, album ? 'Ver Álbum' : 'Ver'))));
 }
+const VERIFY_MSG = {
+  error: 'Não foi possível usar o Windows Hello.',
+  busy: 'O Windows Hello está ocupado. Tente de novo.',
+  policy: 'O Windows Hello está bloqueado por uma política deste PC.',
+};
 async function unlock() {
   const r = await api.verify('Desbloquear álbuns protegidos do Fotos');
-  if (r === 'ok' || r === 'unavailable') {
+  // libera só com 'ok' ou PC sem Hello configurado; 'cancel' não diz nada. O modo demonstração
+  // (api.js no navegador) ainda devolve 'unavailable' e precisa abrir.
+  if (r === 'ok' || r === 'not_configured' || (!native && r === 'unavailable')) {
     R.unlocked = true;
     renderView();
     renderNav();
-  }
+  } else if (r !== 'cancel') toast(VERIFY_MSG[r] || VERIFY_MSG.error, 'lock');
 }
+const LOCKED = r => r.view === 'set' && !!SETS[r.key]?.locked;
+/** como no iOS, Ocultos e Apagados trancam de novo ao sair deles */
+function relockIfLeaving(next) {
+  if (R.unlocked && !LOCKED(next)) R.unlocked = false;
+}
+// ...e quando a janela vai para segundo plano (minimizada)
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden || !R.unlocked) return;
+  R.unlocked = false;
+  if (LOCKED(R.route) && !document.querySelector('.viewer')) { renderView(); renderNav(); }
+});
 
 /** tela de grade (biblioteca, álbuns, coleções) */
 function gridView({ items, title, sub, sub2, bottom: startBottom, restoreScroll, scrollTo, badge, empty, newestLast, memory }) {
@@ -658,12 +826,16 @@ function gridView({ items, title, sub, sub2, bottom: startBottom, restoreScroll,
     return;
   }
   let head = null;
+  // `sub` pode ser função da lista: o onChange recalcula cabeçalho e barra depois de cada save
+  const subOf = typeof sub === 'function' ? sub : () => sub;
+  R.head = title ? { title, sub: typeof sub === 'function' ? sub : null } : null;
+  sub = subOf(items);
   if (title) {
-    head = h('div.grid-head', h('h1', title), sub ? h('p', sub) : null, sub2 ? h('p', sub2) : null,
+    head = h('div.grid-head', h('h1', title), sub ? h('p.sub', sub) : null, sub2 ? h('p', sub2) : null,
       memory ? h('button.gbtn.accent', { style: { marginTop: '12px' }, onclick: () => playMemory(memory) }, icon('play'), 'Reproduzir Memória') : null);
     s.append(head);
   } else {
-    s.append(h('div', { style: { height: '68px' } }));
+    s.append(h('div', { style: { height: 'calc(var(--top-safe) - 8px)' } }));
   }
   const host = h('div');
   s.append(host);
@@ -677,10 +849,7 @@ function gridView({ items, title, sub, sub2, bottom: startBottom, restoreScroll,
     onScroll: (it, top) => {
       if (!it) return;
       if (!title) setTitle(fmt.monthYear(new Date(it.t)), placeLabel(it.lat != null ? it : null) || fmt.dayShort(new Date(it.t)));
-      else {
-        const t = toolbar.querySelector('.tb-title b');
-        if (t) t.style.opacity = top > -20 ? 1 : 0;
-      }
+      else if (R.tbFade !== !(top > -20)) tbFade(!(top > -20));
     },
   }));
   g.setAspect(S.data.settings.aspect);
@@ -738,8 +907,12 @@ function cycler(card, items) {
   const step = Math.max(1, Math.floor(pick.length / 6));
   const list = pick.filter((_, k) => k % step === 0).slice(0, 6);
   let k = 0, timer;
+  const stop = () => { clearInterval(timer); timer = 0; };
   card.addEventListener('mouseenter', () => {
+    stop();
     timer = setInterval(() => {
+      // clicado, o cartão sai do DOM sem mouseleave: o intervalo seguia gerando miniaturas para sempre
+      if (!card.isConnected) return stop();
       k = (k + 1) % list.length;
       const img = h('img', { src: thumbUrl(list[k], 720, editV(list[k])), class: 'out' });
       img.onload = () => {
@@ -750,7 +923,9 @@ function cycler(card, items) {
       };
     }, 1500);
   });
-  card.addEventListener('mouseleave', () => clearInterval(timer));
+  card.addEventListener('mouseleave', stop);
+  card.addEventListener('click', stop);
+  R.cleanup.push(stop);
 }
 
 function yearsView(restoreScroll) {
@@ -766,7 +941,7 @@ function yearsView(restoreScroll) {
     wrap.append(card);
   });
   s.append(wrap);
-  setTitle('Anos', `${ys.length} anos`);
+  setTitle('Anos', plural(ys.length, 'ano', 'anos'));
   if (restoreScroll != null) s.scrollTop = restoreScroll;
   else s.scrollTop = s.scrollHeight;
 }
@@ -789,7 +964,7 @@ function monthsView(restoreScroll) {
     wrap.append(card);
   });
   s.append(wrap);
-  setTitle('Meses', `${ms.length} meses`);
+  setTitle('Meses', plural(ms.length, 'mês', 'meses'));
   if (restoreScroll != null) s.scrollTop = restoreScroll;
   else if (target) s.scrollTop = target.offsetTop - 80;
   else s.scrollTop = s.scrollHeight;
@@ -812,7 +987,7 @@ function dayCard(d) {
 }
 function memCard(m) {
   const c = m.cover;
-  return h('button.memcard', { onclick: () => playMemory(m) },
+  return h('button.memcard', { onclick: () => playMemory(m), dataset: m.trip && m.center ? { geo: geoKey(m.center) } : {} },
     h('img', { src: thumbUrl(c, 720, editV(c)), loading: 'lazy' }),
     h('div.t', h('b', m.title), h('span', m.subtitle)),
     h('div.play.glass.dim', icon('play')));
@@ -822,7 +997,7 @@ function pinTile(k) {
   if (!p) return null;
   const items = p.items();
   if (p.locked && S.data.settings.hello && !R.unlocked) {
-    return h('button.pin', { onclick: () => go(p.route, true) }, h('div.lockface', icon('lock')), h('div.t', { style: { color: 'var(--label)', background: 'none' } }, icon(p.ic), p.label));
+    return h('button.pin.locked', { onclick: () => go(p.route, true) }, h('div.lockface', icon('lock')), h('div.t', icon(p.ic), p.label));
   }
   if (k === 'map') {
     const cover = items.at(-1);
@@ -860,26 +1035,35 @@ function collectionsView(restoreScroll) {
   const types = MEDIA_TYPES.map(k => [k, SETS[k].get().length]).filter(([, n]) => n);
   page.append(h('div.lists',
     types.length ? h('section.sec', h('div.sec-head', h('h2', 'Tipos de Mídia')), h('div.list', types.map(([k, n]) => listRow(SETS[k].icon, SETS[k].title, nf.format(n), () => go({ view: 'set', key: k }, true))))) : null,
-    h('section.sec', h('div.sec-head', h('h2', 'Utilidades')), h('div.list', UTILITIES.map(k => listRow(SETS[k].icon, SETS[k].title, SETS[k].locked ? null : nf.format(SETS[k].get().length), () => go({ view: 'set', key: k }, true))),
+    h('section.sec', h('div.sec-head', h('h2', 'Utilidades')), h('div.list', visibleUtilities().map(k => listRow(SETS[k].icon, SETS[k].title, SETS[k].locked ? null : nf.format(SETS[k].get().length), () => go({ view: 'set', key: k }, true))),
       listRow('map', 'Mapa', nf.format(SETS.located.get().length), () => go({ view: 'map' }, true))))));
   s.append(page);
   setTitle('Coleções', '');
-  const t = toolbar.querySelector('.tb-title b');
-  const upd = () => { if (t) t.style.opacity = s.scrollTop > 50 ? 1 : 0; };
+  const upd = () => { if (R.tbFade !== !(s.scrollTop > 50)) tbFade(!(s.scrollTop > 50)); };
   s.addEventListener('scroll', upd, { passive: true });
   upd();
   if (restoreScroll != null) s.scrollTop = restoreScroll;
   // nomes de lugares das viagens chegam aos poucos
-  for (const t of tr.slice(0, 10)) if (!placeLabel(t.center)) resolvePlace(t.center).then(n => n && R.route.view === 'collections' && debouncedRefresh());
+  resolvePlaces(tr.slice(0, 10).map(t => t.center));
 }
-const debouncedRefresh = debounce(() => {
-  const s = view.querySelector('.scroller');
-  renderView(s?.scrollTop);
-}, 1500);
+
+// Nomes de lugares: em vez de redesenhar a tela inteira a cada resposta do Nominatim (as faixas
+// voltavam ao início e as seções piscavam), troca só o título dos cartões daquele lugar.
+const geoKey = c => `${c.lat.toFixed(1)},${c.lon.toFixed(1)}`;
+function resolvePlaces(centers) {
+  const v = view.firstElementChild;
+  for (const c of centers) {
+    if (!c || placeLabel(c)) continue;
+    resolvePlace(c).then(n => {
+      if (!n || view.firstElementChild !== v) return;
+      view.querySelectorAll(`[data-geo="${geoKey(c)}"] .t b`).forEach(b => (b.textContent = n));
+    });
+  }
+}
 
 function tripCard(t) {
   const c = keyPhoto(t.items);
-  return h('button.memcard', { style: { width: '300px', aspectRatio: '4 / 3' }, onclick: () => go({ view: 'trip', id: t.id }, true) },
+  return h('button.memcard', { style: { width: '300px', aspectRatio: '4 / 3' }, dataset: { geo: geoKey(t.center) }, onclick: () => go({ view: 'trip', id: t.id }, true) },
     h('img', { src: thumbUrl(c, 720, editV(c)), loading: 'lazy' }),
     h('div.t', h('b', placeLabel(t.center) || 'Viagem'), h('span', rangeLabel(t.date, t.end))));
 }
@@ -903,8 +1087,7 @@ function pageWith(title, sub, body) {
   const s = scroller();
   s.append(h('div.page', h('div.page-head', h('div', h('h1', title), sub ? h('p', sub) : null)), body));
   setTitle(title, '');
-  const t = toolbar.querySelector('.tb-title b');
-  const upd = () => { if (t) t.style.opacity = s.scrollTop > 50 ? 1 : 0; };
+  const upd = () => { if (R.tbFade !== !(s.scrollTop > 50)) tbFade(!(s.scrollTop > 50)); };
   s.addEventListener('scroll', upd, { passive: true });
   upd();
   return s;
@@ -914,8 +1097,8 @@ const wrapGrid = (min, kids) => h('div', { style: { display: 'grid', gridTemplat
 function memoriesView() {
   const mem = memories();
   if (!mem.length) return view.append(emptyState('memories', 'Nenhuma Memória Ainda', 'As memórias aparecem quando houver fotos suficientes de um dia, viagem ou mês.'));
-  pageWith('Memórias', `${mem.length} memórias`, wrapGrid(240, mem.map(m => { const c = memCard(m); c.style.width = 'auto'; return c; })));
-  for (const m of mem) if (m.trip && !placeLabel(m.center)) resolvePlace(m.center).then(n => n && R.route.view === 'memories' && debouncedRefresh());
+  pageWith('Memórias', plural(mem.length, 'memória', 'memórias'), wrapGrid(240, mem.map(m => { const c = memCard(m); c.style.width = 'auto'; return c; })));
+  resolvePlaces(mem.filter(m => m.trip).map(m => m.center));
 }
 function daysView() {
   const ds = recentDays(60);
@@ -924,9 +1107,11 @@ function daysView() {
 function tripsView() {
   const tr = trips();
   if (!tr.length) return view.append(emptyState('trips', 'Nenhuma Viagem', 'Viagens aparecem quando há fotos com localização longe de casa.'));
-  pageWith('Viagens', `${tr.length} viagens`, wrapGrid(280, tr.map(t => { const c = tripCard(t); c.style.width = 'auto'; return c; })));
-  for (const t of tr) if (!placeLabel(t.center)) resolvePlace(t.center).then(n => n && R.route.view === 'trips' && debouncedRefresh());
+  pageWith('Viagens', plural(tr.length, 'viagem', 'viagens'), wrapGrid(280, tr.map(t => { const c = tripCard(t); c.style.width = 'auto'; return c; })));
+  resolvePlaces(tr.map(t => t.center));
 }
+
+const searchSub = (res, q) => (res.length ? `${fmt.items(res.length)} para “${q}”` : `Nenhum resultado para “${q}”`);
 
 function searchView() {
   const q = R.route.q || '';
@@ -934,7 +1119,7 @@ function searchView() {
   const res = search(q);
   const s = scroller();
   const head = h('div.page', { style: { paddingBottom: '0' } },
-    h('div.page-head', h('div', h('h1', 'Buscar'), h('p', res.length ? `${fmt.items(res.length)} para “${q}”` : `Nenhum resultado para “${q}”`))),
+    h('div.page-head', h('div', h('h1', 'Buscar'), h('p.sub', searchSub(res, q)))),
     sug.length ? h('div.list', { style: { marginBottom: '22px' } }, sug.map(x => listRow(x.icon, x.label, x.sub, () => {
       if (x.go) { searchInput.value = ''; go(x.go); } else { searchInput.value = x.q; R.route.q = x.q; renderView(); }
     }))) : null);
@@ -944,9 +1129,10 @@ function searchView() {
   const host = h('div');
   s.append(host, h('div.grid-foot', h('b', fmt.items(res.length))));
   const g = (R.grid = new VGrid({
-    scroller: s, host, items: res, cols: colsFor(s.clientWidth, S.data.settings.zoom), selection: R.sel, selecting: () => R.selecting, onSel,
+    scroller: s, host, items: res, cols: colsFor(s.clientWidth, S.data.settings.zoom), aspect: S.data.settings.aspect, selection: R.sel, selecting: () => R.selecting, onSel,
     onOpen: (it, i, list) => openViewer(list, i, { grid: g, rect: g.tileRect(i) }), onContext: (it, i, e) => tileMenu(it, i, e),
   }));
+  g.setAspect(S.data.settings.aspect);
   watchCols(g, host);
   renderChrome();
 }
@@ -965,13 +1151,15 @@ function ambient() {
 
 // ============ atalhos ============
 document.addEventListener('keydown', e => {
-  if (document.querySelector('.viewer, .editor, .memory, .sheet, .alert')) return;
+  if (document.querySelector('.viewer, .editor, .memory, .sheet, .alert, .menu')) return;
   const typing = e.target.matches?.('input, textarea');
   if (e.ctrlKey && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); openSearch(); return; }
+  // Ctrl+= / Ctrl+- nunca chegam ao zoom da WebView (nem com o foco no campo de busca)
+  const zoomKey = e.ctrlKey && (e.key === '=' || e.key === '+' || e.key === '-');
+  if (zoomKey) e.preventDefault();
   if (typing) return;
-  if (e.ctrlKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoom(-1); }
-  else if (e.ctrlKey && e.key === '-') { e.preventDefault(); zoom(1); }
-  else if (e.ctrlKey && (e.key === 'a' || e.key === 'A') && R.grid) { e.preventDefault(); if (!R.selecting) startSelect(); selectAll(); }
+  if (zoomKey) zoom(e.key === '-' ? 1 : -1);
+  else if (e.ctrlKey && (e.key === 'a' || e.key === 'A') && R.grid) { e.preventDefault(); if (!R.selecting) startSelect(); selectAll(false); }
   else if (e.ctrlKey && e.altKey && (e.key === 's' || e.key === 'S')) toggleSidebar();
   else if (e.key === 'Escape' && R.selecting) endSelect();
   else if ((e.key === 'Delete' || e.key === 'Backspace') && R.sel.size) deleteItems([...R.sel]);
@@ -992,28 +1180,54 @@ onChange(() => {
     renderNav();
     const r = R.route;
     if (document.querySelector('.viewer')) return;
-    if (R.grid && ['library', 'set', 'album', 'day', 'folder', 'trip'].includes(r.view) && r.mode !== 'years' && r.mode !== 'months') {
+    const scrollTop = view.querySelector('.scroller')?.scrollTop;
+    if (R.grid && ['library', 'set', 'album', 'day', 'folder', 'trip', 'search'].includes(r.view) && r.mode !== 'years' && r.mode !== 'months') {
       const items = currentItems();
       if (items) {
         R.grid.setItems(items);
+        pruneSelection(items);
         const f = view.querySelector('.grid-foot b');
-        const nP = items.filter(i => !i.video).length;
-        if (f) f.textContent = fmt.count(nP, items.length - nP);
+        if (f) f.textContent = r.view === 'search' ? fmt.items(items.length) : countSub(items);
+        // cabeçalho e barra superior acompanham a contagem (antes só o rodapé mudava)
+        if (r.view === 'search') {
+          const p = view.querySelector('.page-head p.sub');
+          if (p) p.textContent = searchSub(items, r.q || '');
+        } else if (R.head?.sub) {
+          const sub = R.head.sub(items);
+          const p = view.querySelector('.grid-head p.sub');
+          if (p) p.textContent = sub;
+          setTitle(R.head.title, sub);
+        }
         if (!items.length) renderView();
         return;
       }
     }
-    if (!['map', 'search'].includes(r.view)) renderView(view.querySelector('.scroller')?.scrollTop);
+    // a busca sem resultados (sem grade) também se refaz: o termo pode voltar a casar depois de recuperar
+    if (r.view !== 'map') renderView(scrollTop);
   });
 });
+
+/** tira da seleção o que saiu da grade (ocultado, apagado, removido do álbum): senão a barra
+ *  contava itens invisíveis e o próximo Apagar levava junto o que a pessoa não via */
+function pruneSelection(items) {
+  if (!R.sel.size) return;
+  const ids = new Set(items.map(i => i.id));
+  let changed = false;
+  for (const id of R.sel) if (!ids.has(id)) { R.sel.delete(id); changed = true; }
+  if (!changed) return;
+  R.grid.syncSelection();
+  const bar = bottom.querySelector('.selbar');
+  if (bar) updateSelBar(bar);
+}
 
 function currentItems() {
   const r = R.route;
   if (r.view === 'library') return library();
+  if (r.view === 'search') return search(r.q || '');
   if (r.view === 'set') return SETS[r.key].locked && S.data.settings.hello && !R.unlocked ? null : SETS[r.key].get();
   if (r.view === 'album') { const a = albumById(r.id); return a ? albumItems(a) : null; }
   if (r.view === 'day') return library().filter(i => i.day === r.key);
-  if (r.view === 'folder') { const p = norm(r.path); return library().filter(i => norm(i.path).startsWith(p)); }
+  if (r.view === 'folder') return folderItems(r.path);
   if (r.view === 'trip') return trips().find(t => t.id === r.id)?.items;
   return null;
 }
@@ -1024,6 +1238,7 @@ async function boot() {
   wireWindow();
   await loadData();
   applyTheme();
+  if (!compact() && S.data.settings.sideOff) document.body.classList.add('side-off');
   if (!S.data.folders.length) {
     S.data.folders = await api.defaultFolders();
     save();
@@ -1035,9 +1250,10 @@ async function boot() {
   ambient();
   // a janela aparece já; a foto aberta pelo Explorador entra logo depois (ler a pasta pode levar segundos)
   api.win?.show();
+  // ouve a 2ª instância antes de pegar o arquivo da abertura, para nenhum pedido se perder no meio
+  if (native) window.__TAURI__.event.listen('open-file', e => openFromPath(e.payload));
   const launch = await api.launchFile();
   if (launch) await openFromPath(launch);
-  if (native) window.__TAURI__.event.listen('open-file', e => openFromPath(e.payload));
   await rescan(!cached.length);
   ambient();
 

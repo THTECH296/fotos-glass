@@ -1,0 +1,10 @@
+/* Editor: estados que a viewer.css não cobre. Precisa de <link rel="stylesheet" href="css/editor.css" /> no index.html. */
+
+/* salvando/exportando: os controles ficam inertes (editor.js) e apagados, para não parecerem clicáveis.
+   O palco não apaga: no vídeo, é o que está sendo gravado. */
+.editor.e-busy > .e-top,
+.editor.e-busy > .e-bottom { opacity: .35; transition: opacity .2s var(--ease, ease); }
+.editor.e-busy .e-stage { cursor: progress; }
+
+/* carregamento: o canvas vazio não aparece atrás do indicador */
+.editor .e-canvas[style*="opacity: 0"] { box-shadow: none; }

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
-    io::BufReader,
+    io::{BufReader, Read},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -29,6 +29,17 @@ pub const VIDEO_EXT: &[&str] = &[
     "mp4", "m4v", "mov", "wmv", "asf", "avi", "mkv", "webm", "3gp", "3g2", "mts", "m2ts",
     "mpg", "mpeg", "vob",
 ];
+/// Vídeos que o WebView2 toca. Só esses são registrados como "abre com o Fotos": os outros
+/// mostrariam "Abrir no Player", que voltaria a abrir o próprio Fotos (ciclo).
+pub const VIDEO_PLAYABLE: &[&str] = &["mp4", "m4v", "mov", "webm"];
+
+/// Arquivo "só online" do OneDrive (Arquivos sob Demanda) ou offline: ler o conteúdo dispara o download.
+const NUVEM_ATTRS: u32 = 0x1000 /* OFFLINE */ | 0x4_0000 /* RECALL_ON_OPEN */ | 0x40_0000 /* RECALL_ON_DATA_ACCESS */;
+
+pub fn so_na_nuvem(md: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    md.file_attributes() & NUVEM_ATTRS != 0
+}
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Item {
@@ -100,11 +111,14 @@ pub fn load_index(file: &Path) -> Vec<Item> {
 }
 
 pub fn scan(app: &AppHandle, folders: &[String], index_file: &Path) -> Vec<Item> {
+    // dois scans ao mesmo tempo (rescan + import + abrir arquivo) disputariam o index.json
+    static UM_POR_VEZ: Mutex<()> = Mutex::new(());
+    let _g = UM_POR_VEZ.lock().unwrap_or_else(|e| e.into_inner());
     let cache: HashMap<String, Item> = load_index(index_file).into_iter().map(|i| (i.path.clone(), i)).collect();
 
     // Lista de arquivos (sem repetir quando uma pasta está dentro de outra).
     let mut seen = HashSet::new();
-    let mut files: Vec<(PathBuf, u64, i64, i64)> = Vec::new();
+    let mut files: Vec<(PathBuf, u64, i64, i64, bool)> = Vec::new();
     for folder in folders {
         let walker = walkdir::WalkDir::new(folder).follow_links(false).into_iter().filter_entry(|e| {
             let n = e.file_name().to_string_lossy();
@@ -120,7 +134,8 @@ pub fn scan(app: &AppHandle, folders: &[String], index_file: &Path) -> Vec<Item>
                 continue;
             }
             let Ok(md) = e.metadata() else { continue };
-            if md.len() < 4096 {
+            // vazio não é foto; ícones minúsculos saem pelo filtro de largura (< 48 px) mais abaixo
+            if md.len() == 0 {
                 continue;
             }
             let key = p.to_string_lossy().to_lowercase();
@@ -129,7 +144,7 @@ pub fn scan(app: &AppHandle, folders: &[String], index_file: &Path) -> Vec<Item>
             }
             let mtime = md.modified().map(secs).unwrap_or(0);
             let ctime = md.created().map(secs).unwrap_or(mtime);
-            files.push((p.to_path_buf(), md.len(), mtime, ctime));
+            files.push((p.to_path_buf(), md.len(), mtime, ctime, so_na_nuvem(&md)));
         }
     }
 
@@ -150,17 +165,17 @@ pub fn scan(app: &AppHandle, folders: &[String], index_file: &Path) -> Vec<Item>
                     if i >= total {
                         break;
                     }
-                    let (p, size, mtime, ctime) = &files[i];
+                    let (p, size, mtime, ctime, nuvem) = &files[i];
                     let key = p.to_string_lossy().to_string();
                     let item = match cache.get(&key) {
                         Some(c) if c.size == *size && c.mtime == *mtime => c.clone(),
-                        _ => read_item(p, *size, *mtime, *ctime),
+                        _ => read_item(p, *size, *mtime, *ctime, *nuvem),
                     };
                     if item.video || (item.w == 0 || item.w >= 48) {
                         local.push(item);
                     }
                     let d = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    if d % 150 == 0 {
+                    if d.is_multiple_of(150) {
                         let _ = app.emit("scan-progress", (d, total));
                     }
                 }
@@ -172,19 +187,64 @@ pub fn scan(app: &AppHandle, folders: &[String], index_file: &Path) -> Vec<Item>
     let mut items = out.into_inner().unwrap();
     items.sort_by(|a, b| a.date.cmp(&b.date).then(a.name.cmp(&b.name)));
     if let Ok(json) = serde_json::to_vec(&items) {
-        let tmp = index_file.with_extension("tmp");
-        if fs::write(&tmp, json).is_ok() {
-            let _ = fs::rename(&tmp, index_file);
+        let tmp = index_file.with_extension(format!("{}.tmp", std::process::id()));
+        if fs::write(&tmp, json).is_ok() && fs::rename(&tmp, index_file).is_err() {
+            let _ = fs::remove_file(&tmp);
         }
     }
     let _ = app.emit("scan-progress", (total, total));
     items
 }
 
-pub fn read_item(p: &Path, size: u64, mtime: i64, ctime: i64) -> Item {
+/// `nuvem`: arquivo só online do OneDrive; não lê o conteúdo (baixaria o arquivo), só o que o Shell já sabe.
+pub fn read_item(p: &Path, size: u64, mtime: i64, ctime: i64, nuvem: bool) -> Item {
+    // um arquivo malformado não pode derrubar o scan (os parsers de EXIF/tamanho já tiveram pânicos)
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read_item_inner(p, size, mtime, ctime, nuvem))).unwrap_or_else(|_| {
+        let mut it = base_item(p, size, mtime);
+        it.date = iso(data_pelo_nome(&it.name).unwrap_or_else(|| fallback_date(mtime, ctime)));
+        it
+    })
+}
+
+/// Data de criação inválida (0 = 1601, comum em SMB/zip) não pode puxar a foto para 1970.
+fn fallback_date(mtime: i64, ctime: i64) -> NaiveDateTime {
+    local_naive([mtime, ctime].into_iter().filter(|&t| t > 0).min().unwrap_or(0))
+}
+
+fn read_item_inner(p: &Path, size: u64, mtime: i64, ctime: i64, nuvem: bool) -> Item {
+    let mut it = base_item(p, size, mtime);
+    let video = it.video;
+
+    let mut date: Option<NaiveDateTime>;
+    if video {
+        // a data de gravação vem antes do nome: o Pixel põe a hora UTC no nome (PXL_...)
+        let (dur, enc, w, h) = if nuvem { crate::shell::props_rapidas(&it.path, true) } else { crate::shell::video_props(&it.path) };
+        it.dur = dur;
+        it.w = w;
+        it.h = h;
+        date = enc.map(local_naive);
+    } else if nuvem {
+        let (_, taken, w, h) = crate::shell::props_rapidas(&it.path, false);
+        it.w = w;
+        it.h = h;
+        date = taken.map(local_naive);
+    } else {
+        if let Ok(sz) = imagesize::size(p) {
+            it.w = sz.width as u32;
+            it.h = sz.height as u32;
+        }
+        date = read_exif(p, &mut it);
+    }
+    if date.is_none() {
+        date = data_pelo_nome(&it.name);
+    }
+    it.date = iso(date.unwrap_or_else(|| fallback_date(mtime, ctime)));
+    it
+}
+
+fn base_item(p: &Path, size: u64, mtime: i64) -> Item {
     let ext = ext_of(p);
-    let video = VIDEO_EXT.contains(&ext.as_str());
-    let mut it = Item {
+    Item {
         id: id_for(p),
         path: p.to_string_lossy().to_string(),
         name: p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
@@ -198,35 +258,11 @@ pub fn read_item(p: &Path, size: u64, mtime: i64, ctime: i64) -> Item {
             "apng" => "PNG".into(),
             e => e.to_uppercase(),
         },
-        video,
+        video: VIDEO_EXT.contains(&ext.as_str()),
         size,
         mtime,
         ..Default::default()
-    };
-
-    let mut date: Option<NaiveDateTime> = None;
-    if !video {
-        if let Ok(sz) = imagesize::size(p) {
-            it.w = sz.width as u32;
-            it.h = sz.height as u32;
-        }
-        date = read_exif(p, &mut it);
     }
-    if date.is_none() {
-        date = date_from_name(&it.name);
-    }
-    if video {
-        let (dur, enc, w, h) = crate::shell::video_props(&it.path);
-        it.dur = dur;
-        it.w = w;
-        it.h = h;
-        if date.is_none() {
-            date = enc.map(|t| local_naive(t));
-        }
-    }
-    let fallback = local_naive(mtime.min(ctime).max(0));
-    it.date = iso(date.unwrap_or(fallback));
-    it
 }
 
 pub fn local_naive(unix: i64) -> NaiveDateTime {
@@ -237,7 +273,7 @@ pub fn local_naive(unix: i64) -> NaiveDateTime {
 
 // ---------- EXIF ----------
 
-fn field<'a>(ex: &'a exif::Exif, t: exif::Tag) -> Option<&'a exif::Field> {
+fn field(ex: &exif::Exif, t: exif::Tag) -> Option<&exif::Field> {
     ex.get_field(t, exif::In::PRIMARY)
 }
 fn ascii(ex: &exif::Exif, t: exif::Tag) -> Option<String> {
@@ -273,8 +309,26 @@ fn dms(ex: &exif::Exif, t: exif::Tag, r: exif::Tag, neg: &str) -> Option<f64> {
 
 fn read_exif(p: &Path, it: &mut Item) -> Option<NaiveDateTime> {
     use exif::Tag;
-    let f = File::open(p).ok()?;
-    let ex = exif::Reader::new().read_from_container(&mut BufReader::new(f)).ok()?;
+    // TIFF e quase todo RAW (DNG, CR2, NEF, ARW…) são TIFF por dentro, e aí o kamadak-exif lê o arquivo
+    // inteiro (25–150 MB, em até 8 threads). Os IFDs ficam no começo: lê só os primeiros 2 MB e, se o
+    // parser reclamar de IFD cortado, tenta 16 MB. Mais que isso fica sem EXIF.
+    let head = |n: u64| -> Option<Vec<u8>> {
+        let mut b = Vec::new();
+        File::open(p).ok()?.take(n).read_to_end(&mut b).ok()?;
+        Some(b)
+    };
+    let first = head(2 * 1024 * 1024)?;
+    let ex = if first.starts_with(b"II*\0") || first.starts_with(b"MM\0*") {
+        let big = first.len() as u64 >= 2 * 1024 * 1024;
+        match exif::Reader::new().read_raw(first) {
+            Ok(ex) => ex,
+            Err(_) if big => exif::Reader::new().read_raw(head(16 * 1024 * 1024)?).ok()?,
+            Err(_) => return None,
+        }
+    } else {
+        let f = File::open(p).ok()?;
+        exif::Reader::new().read_from_container(&mut BufReader::new(f)).ok()?
+    };
 
     it.make = ascii(&ex, Tag::Make);
     it.model = ascii(&ex, Tag::Model);
@@ -365,4 +419,58 @@ fn try_at(b: &[u8], i: usize) -> Option<NaiveDateTime> {
 pub fn date_from_name(name: &str) -> Option<NaiveDateTime> {
     let b = name.as_bytes();
     (0..b.len()).filter(|&i| i == 0 || !b[i - 1].is_ascii_digit()).find_map(|i| try_at(b, i))
+}
+
+/// Como `date_from_name`, mas o Pixel (Google Camera) grava a hora UTC no nome: converte para local.
+fn data_pelo_nome(name: &str) -> Option<NaiveDateTime> {
+    let d = date_from_name(name)?;
+    if name.starts_with("PXL_") {
+        return Some(d.and_utc().with_timezone(&Local).naive_local());
+    }
+    Some(d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn d(name: &str) -> Option<String> {
+        date_from_name(name).map(iso)
+    }
+
+    #[test]
+    fn datas_pelo_nome() {
+        assert_eq!(d("IMG_20240305_142210.jpg").as_deref(), Some("2024-03-05T14:22:10"));
+        assert_eq!(d("VID_20231231_235959.mp4").as_deref(), Some("2023-12-31T23:59:59"));
+        assert_eq!(d("PXL_20240101_120000123.jpg").as_deref(), Some("2024-01-01T12:00:00"));
+        assert_eq!(d("WhatsApp Image 2024-03-05 at 14.22.10.jpeg").as_deref(), Some("2024-03-05T14:22:10"));
+        assert_eq!(d("Screenshot_2022-07-01-09-08-07.png").as_deref(), Some("2022-07-01T09:08:07"));
+        assert_eq!(d("Captura de tela 2024-02-29 101500.png").as_deref(), Some("2024-02-29T10:15:00"));
+        assert_eq!(d("signal-2023-05-06-171819.jpg").as_deref(), Some("2023-05-06T17:18:19"));
+        // só a data: meio-dia
+        assert_eq!(d("Foto 2023-08-15.jpg").as_deref(), Some("2023-08-15T12:00:00"));
+    }
+
+    #[test]
+    fn nomes_sem_data() {
+        for n in ["DSC_2019.jpg", "IMG_9999.jpg", "1700000000000.jpg", "Foto 2023.jpg", "IMG_20230229_101010.jpg", "IMG_20241301_101010.jpg", "x.jpg", ""] {
+            assert_eq!(d(n), None, "{n}");
+        }
+    }
+
+    #[test]
+    fn pixel_vem_em_utc() {
+        let utc = date_from_name("PXL_20240101_120000123.mp4").unwrap();
+        let local = data_pelo_nome("PXL_20240101_120000123.mp4").unwrap();
+        assert_eq!(local, utc.and_utc().with_timezone(&Local).naive_local());
+        assert_eq!(data_pelo_nome("IMG_20240101_120000.jpg"), date_from_name("IMG_20240101_120000.jpg"));
+    }
+
+    #[test]
+    fn data_de_criacao_zerada_nao_vira_1970() {
+        let m = 1_700_000_000;
+        assert_eq!(fallback_date(m, 0), local_naive(m));
+        assert_eq!(fallback_date(m, m - 10), local_naive(m - 10));
+        assert_eq!(fallback_date(0, m), local_naive(m));
+    }
 }

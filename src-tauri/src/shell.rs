@@ -159,6 +159,53 @@ pub fn video_props(path: &str) -> (Option<f64>, Option<i64>, u32, u32) {
     }
 }
 
+/// Como `video_props`, mas só com o que o Shell/provedor já tem guardado (GPS_FASTPROPERTIESONLY):
+/// não abre o arquivo, então não baixa o que está só na nuvem do OneDrive. Para foto, a data é a
+/// "Data da foto" (System.Photo.DateTaken) e as dimensões vêm de System.Image.
+pub fn props_rapidas(path: &str, video: bool) -> (Option<f64>, Option<i64>, u32, u32) {
+    use windows::Win32::{
+        Storage::EnhancedStorage::{PKEY_Image_HorizontalSize, PKEY_Image_VerticalSize, PKEY_Photo_DateTaken},
+        System::{
+            Com::StructuredStorage::{PropVariantClear, PropVariantToFileTime, PropVariantToUInt32, PropVariantToUInt64, PROPVARIANT},
+            Variant::PSTF_UTC,
+        },
+        UI::Shell::PropertiesSystem::{IPropertyStore, GPS_FASTPROPERTIESONLY},
+    };
+    com_init();
+    unsafe {
+        let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem2>(&HSTRING::from(path), None) else {
+            return (None, None, 0, 0);
+        };
+        let Ok(store) = item.GetPropertyStore::<IPropertyStore>(GPS_FASTPROPERTIESONLY) else {
+            return (None, None, 0, 0);
+        };
+        let ler = |k: &windows::Win32::Foundation::PROPERTYKEY, f: &dyn Fn(&PROPVARIANT) -> Option<u64>| {
+            let mut v = store.GetValue(k).ok()?;
+            let r = f(&v);
+            let _ = PropVariantClear(&mut v);
+            r
+        };
+        let num64 = |v: &PROPVARIANT| PropVariantToUInt64(v).ok();
+        let num32 = |v: &PROPVARIANT| PropVariantToUInt32(v).ok().map(u64::from);
+        let data = |v: &PROPVARIANT| {
+            PropVariantToFileTime(v, PSTF_UTC).ok().map(|ft| ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64)
+        };
+        let unix = |t: u64| (t > 116_444_736_000_000_000).then(|| ((t - 116_444_736_000_000_000) / 10_000_000) as i64);
+        if video {
+            let dur = ler(&PKEY_Media_Duration, &num64).map(|d| d as f64 / 10_000_000.0);
+            let enc = ler(&PKEY_Media_DateEncoded, &data).and_then(unix);
+            let w = ler(&PKEY_Video_FrameWidth, &num32).unwrap_or(0) as u32;
+            let h = ler(&PKEY_Video_FrameHeight, &num32).unwrap_or(0) as u32;
+            (dur, enc, w, h)
+        } else {
+            let taken = ler(&PKEY_Photo_DateTaken, &data).and_then(unix);
+            let w = ler(&PKEY_Image_HorizontalSize, &num32).unwrap_or(0) as u32;
+            let h = ler(&PKEY_Image_VerticalSize, &num32).unwrap_or(0) as u32;
+            (None, taken, w, h)
+        }
+    }
+}
+
 pub fn set_wallpaper(path: &str) -> bool {
     let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
@@ -172,16 +219,54 @@ pub fn set_wallpaper(path: &str) -> bool {
     }
 }
 
-/// Windows Hello: "ok", "cancel" ou "unavailable".
-pub fn verify(message: &str) -> &'static str {
-    use windows::Security::Credentials::UI::{UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability};
-    let avail = UserConsentVerifier::CheckAvailabilityAsync().and_then(|op| op.get());
-    if !matches!(avail, Ok(UserConsentVerifierAvailability::Available)) {
-        return "unavailable";
+/// Windows Hello: "ok" (verificado), "not_configured" (o PC não tem Hello/PIN: o app decide liberar),
+/// ou recusa: "cancel", "busy", "policy", "error". Antes erro, política e ocupado viravam
+/// "unavailable" e o frontend liberava os álbuns protegidos (falha aberta).
+/// `hwnd`: janela dona do diálogo (0 = sem dona).
+pub fn verify(message: &str, hwnd: isize) -> &'static str {
+    use windows::Security::Credentials::UI::{UserConsentVerificationResult as R, UserConsentVerifier, UserConsentVerifierAvailability as A};
+    use windows::Win32::{Foundation::HWND, System::WinRT::IUserConsentVerifierInterop};
+    match UserConsentVerifier::CheckAvailabilityAsync().and_then(|op| op.get()) {
+        Ok(A::Available) => {}
+        Ok(A::DeviceNotPresent) | Ok(A::NotConfiguredForUser) => return "not_configured",
+        Ok(A::DisabledByPolicy) => return "policy",
+        Ok(A::DeviceBusy) => return "busy",
+        _ => return "error",
     }
-    match UserConsentVerifier::RequestVerificationAsync(&HSTRING::from(message)).and_then(|op| op.get()) {
-        Ok(UserConsentVerificationResult::Verified) => "ok",
-        Ok(_) => "cancel",
-        Err(_) => "unavailable",
+    // O tipo da operação (IAsyncOperation<UserConsentVerificationResult>) vem do crate windows-future;
+    // em vez de depender dele, o tipo é inferido da versão sem janela, que não chega a ser chamada.
+    fn pela_janela<T: windows::core::Interface>(
+        _mesmo_tipo: fn(&HSTRING) -> windows::core::Result<T>,
+        hwnd: isize,
+        msg: &HSTRING,
+    ) -> windows::core::Result<T> {
+        let f = windows::core::factory::<UserConsentVerifier, IUserConsentVerifierInterop>()?;
+        unsafe { f.RequestVerificationForWindowAsync(HWND(hwnd as *mut c_void), msg) }
     }
+    let msg = HSTRING::from(message);
+    // App Win32: com a janela dona o diálogo abre na frente do Fotos (sem ela pode abrir atrás ou falhar)
+    let op = if hwnd != 0 {
+        pela_janela(UserConsentVerifier::RequestVerificationAsync, hwnd, &msg).or_else(|_| UserConsentVerifier::RequestVerificationAsync(&msg))
+    } else {
+        UserConsentVerifier::RequestVerificationAsync(&msg)
+    };
+    match op.and_then(|op| op.get()) {
+        Ok(R::Verified) => "ok",
+        Ok(R::Canceled) | Ok(R::RetriesExhausted) => "cancel",
+        Ok(R::DeviceBusy) => "busy",
+        Ok(R::DisabledByPolicy) => "policy",
+        Ok(R::DeviceNotPresent) | Ok(R::NotConfiguredForUser) => "not_configured",
+        _ => "error",
+    }
+}
+
+/// Abre um link https:// no navegador padrão (ShellExecute "open").
+pub fn open_url(url: &str) -> bool {
+    use windows::{
+        core::w,
+        Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+    };
+    let r = unsafe { ShellExecuteW(None, w!("open"), &HSTRING::from(url), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+    // ShellExecute devolve um "HINSTANCE" > 32 quando deu certo
+    r.0 as isize > 32
 }

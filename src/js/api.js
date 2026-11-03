@@ -20,13 +20,24 @@ export const api = {
   trash: ids => (native ? invoke('trash_files', { ids }) : Promise.resolve(ids.length)),
   reveal: id => native && invoke('reveal', { id }),
   openDefault: id => native && invoke('open_with_default', { id }),
-  openPath: path => native && invoke('open_path', { path }),
+  /** só pasta que existe (o Rust recusa arquivo, programa ou shell:) */
+  openFolder: path => native && invoke('open_folder', { path }),
+  /** só https:// */
+  openUrl: url => (native ? invoke('open_url', { url }) : window.open(url, '_blank', 'noopener')),
+  /** @deprecated o comando open_path saiu (executava qualquer coisa pelo Explorador); use openFolder/openUrl */
+  openPath: path => (/^https:\/\//i.test(path) ? api.openUrl(path) : api.openFolder(path)),
   saveRender: (id, data) => (native ? invoke('save_render', { id, data }) : Promise.resolve()),
+  /** vídeo editado em binário (Uint8Array), sem passar por base64 */
+  saveRenderVideo: (id, ext, bytes) => (native ? T.core.invoke('save_render_raw', bytes, { headers: { 'x-id': id, 'x-ext': ext } }) : Promise.resolve()),
+  saveRenderPoster: (id, bytes) => (native ? T.core.invoke('save_render_raw', bytes, { headers: { 'x-id': id, 'x-ext': 'mp4', 'x-capa': '1' } }) : Promise.resolve()),
   deleteRender: id => native && invoke('delete_render', { id }),
   exportItems: items => (native ? invoke('export_items', { items }) : Promise.resolve(null)),
   setWallpaper: (id, edited) => (native ? invoke('set_wallpaper', { id, edited }) : Promise.resolve()),
-  verify: message => (native ? invoke('verify_user', { message }) : Promise.resolve('unavailable')),
+  /** "ok" | "not_configured" (PC sem Windows Hello) | "cancel" | "busy" | "policy" | "error" */
+  verify: message => (native ? invoke('verify_user', { message }) : Promise.resolve('not_configured')),
   importPaths: (paths, dest) => invoke('import_paths', { paths, dest }),
+  /** [arquivos, bytes] que importPaths copiaria (já sem o que está na biblioteca), para confirmar antes */
+  importPreview: (paths, dest) => (native ? invoke('import_preview', { paths, dest }) : Promise.resolve([0, 0])),
   launchFile: () => (native ? invoke('launch_file') : Promise.resolve(null)),
   openFile: path => invoke('open_file', { path }),
   defaultStatus: () => (native ? invoke('default_status') : Promise.resolve({ photos: false, videos: false })),
@@ -42,11 +53,12 @@ export const api = {
 export function thumbUrl(it, px, editV, fill = false) {
   if (!native) return `https://picsum.photos/seed/${it.seed}/${demoSize(it, px)}`;
   const c = fill ? '&c=1' : '';
-  return editV ? `http://thumb.localhost/r/${it.id}?s=${px}&v=${editV}${c}` : `http://thumb.localhost/${it.id}?s=${px}${c}`;
+  // &m= (mtime): o arquivo alterado fora do app ganha URL nova e não sai do cache HTTP de 1 h
+  return editV ? `http://thumb.localhost/r/${it.id}?s=${px}&v=${editV}${c}` : `http://thumb.localhost/${it.id}?s=${px}&m=${it.mtime}${c}`;
 }
 export function fullUrl(it, editV) {
   if (!native) return `https://picsum.photos/seed/${it.seed}/${demoSize(it, 1800)}`;
-  return editV ? `http://foto.localhost/r/${it.id}?v=${editV}` : `http://foto.localhost/${it.id}`;
+  return editV ? `http://foto.localhost/r/${it.id}?v=${editV}` : `http://foto.localhost/${it.id}?m=${it.mtime}`;
 }
 function demoSize(it, px) {
   const r = it.w / it.h;

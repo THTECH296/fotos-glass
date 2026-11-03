@@ -61,6 +61,7 @@ const P = {
   edit: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
   share: '<path d="M12 3.5v11M8 7.5l4-4 4 4"/><path d="M8.5 10.5H7a2 2 0 0 0-2 2V18a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5.5a2 2 0 0 0-2-2h-1.5"/>',
   check: '<path d="m5.5 12.5 4.2 4.2 8.8-9.4"/>',
+  selectCircle: '<circle cx="12" cy="12" r="8.5"/><path d="m8.3 12.3 2.6 2.6 4.9-5.3"/>',
   checkCircle: '<circle cx="12" cy="12" r="9" fill="currentColor" stroke="none"/><path d="m8 12.3 2.7 2.7 5.4-5.6" stroke="#fff" stroke-width="2"/>',
   sidebar: '<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M9.5 4.5v15M5.6 8h1.6M5.6 11h1.6"/>',
   rotate: '<path d="M5 9.5A7.5 7.5 0 1 1 4.5 14"/><path d="M4.5 4.8v4.9h4.9"/>',
@@ -177,6 +178,9 @@ export const fmt = {
   },
   items: n => `${nf.format(n)} ${n === 1 ? 'item' : 'itens'}`,
 };
+
+/** "1 ano" / "3 anos" */
+export const plural = (n, um, varios) => `${nf.format(n)} ${n === 1 ? um : varios}`;
 
 export const norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 

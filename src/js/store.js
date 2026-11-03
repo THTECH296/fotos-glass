@@ -53,6 +53,13 @@ export function save(now = false) {
   else persist();
   emit();
 }
+/** Grava sem avisar as telas (nomes de lugares, zoom): nada precisa ser redesenhado na hora. */
+export function saveQuiet() {
+  S.version++;
+  cache.clear();
+  unsaved = true;
+  persist();
+}
 /** Espera a última gravação terminar (usado antes de fechar a janela). */
 export async function flushSave() {
   if (unsaved) await writeNow();
@@ -184,7 +191,8 @@ export function featured(n = 24) {
 export function duplicates() {
   return memo('dups', () => {
     const m = new Map();
-    for (const i of live()) {
+    // library(), não live(): uma foto oculta não pode aparecer em Duplicados, que não tem trava
+    for (const i of library()) {
       if (!i.size) continue;
       const k = `${i.size}|${i.w}x${i.h}|${i.date.slice(0, 16)}`;
       if (!m.has(k)) m.set(k, []);
@@ -320,8 +328,12 @@ function hay(i) {
   return i._hay;
 }
 
+// palavras de ligação não viram termo obrigatório ("fotos de 2024" = "fotos 2024")
+const STOP = new Set(['de', 'do', 'da', 'dos', 'das', 'em', 'no', 'na', 'nos', 'nas', 'e', 'com', 'o', 'a', 'os', 'as']);
 export function search(q) {
-  const toks = norm(q).split(/\s+/).filter(Boolean);
+  const all = norm(q).split(/\s+/).filter(Boolean);
+  const toks = all.filter(t => !STOP.has(t));
+  if (!toks.length && all.length) toks.push(...all);
   if (!toks.length) return [];
   return library().filter(i =>
     toks.every(t => {
@@ -425,7 +437,8 @@ export function resolvePlace(c) {
       const a = j.address || {};
       const name = a.city || a.town || a.village || a.municipality || a.county || a.state || j.name || '';
       S.data.places[k] = name;
-      save();
+      // sem emit: cada nome redesenhava Coleções inteira; as telas trocam só o texto do cartão
+      saveQuiet();
       await new Promise(r => setTimeout(r, 1100));
       return name;
     } catch {

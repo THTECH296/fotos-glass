@@ -6,6 +6,7 @@
   <title>Fotos</title>
   <link rel="stylesheet" href="css/app.css" />
   <link rel="stylesheet" href="css/viewer.css" />
+  <link rel="stylesheet" href="css/editor.css" />
   <link rel="stylesheet" href="vendor/leaflet.css" />
   <script>
     // tema antes do primeiro quadro, para não piscar branco no modo escuro
@@ -33,14 +34,15 @@
     </aside>
 
     <main id="main">
+      <!-- a barra superior vem antes da tela no DOM: o Tab passa por ela primeiro (o empilhamento é pelo z-index) -->
+      <header id="toolbar"></header>
       <div id="view"></div>
       <div class="edge-top"></div>
       <div class="edge-bottom"></div>
-      <header id="toolbar"></header>
       <div id="bottom"></div>
     </main>
   </div>
-  <div class="win-controls" id="winctl">
+  <div class="win-controls glass" id="winctl">
     <button class="w-min" title="Minimizar" aria-label="Minimizar"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 6h8" /></svg></button>
     <button class="w-max" title="Maximizar" aria-label="Maximizar"><svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="2.2" /></svg></button>
     <button class="w-close close" title="Fechar" aria-label="Fechar"><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" /></svg></button>

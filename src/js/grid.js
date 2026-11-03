@@ -2,7 +2,7 @@
 
 import { thumbUrl } from './api.js';
 import { icon, fmt } from './util.js';
-import { isFav, editV } from './store.js';
+import { S, isFav, editV } from './store.js';
 
 const BUCKETS = [200, 320, 480, 720, 1024];
 
@@ -11,7 +11,13 @@ export class VGrid {
     Object.assign(this, { cols: 5, aspect: false, badge: null, selection: null, selecting: () => false, onOpen() {}, onContext() {}, onSel() {}, onScroll() {} }, o);
     this.tiles = new Map();
     this.pool = [];
+    this.focusIndex = -1; // quadrado com o foco do teclado (-1: nenhum)
     this.host.classList.add('vgrid');
+    // teclado: a grade é uma parada só no Tab (foco "itinerante"); as setas andam entre os quadrados
+    this.host.tabIndex = 0;
+    this.host.setAttribute('role', 'listbox');
+    this.host.setAttribute('aria-multiselectable', 'true');
+    this.host.setAttribute('aria-label', 'Fotos e vídeos');
     this.raf = 0;
     this.scroller.addEventListener('scroll', () => this.schedule(), { passive: true });
     this.ro = new ResizeObserver(() => this.layout(true));
@@ -24,11 +30,19 @@ export class VGrid {
     this.dead = true;
     this.ro.disconnect();
     cancelAnimationFrame(this.raf);
+    // os listeners de window seguravam a grade antiga (itens e tiles) viva para sempre
+    this.unbind?.();
   }
 
   setItems(items, keepScroll = true) {
+    // mesma lista (só mudou favorito, edição…): atualiza os tiles no lugar, sem piscar as miniaturas
+    if (items.length === this.items.length && items.every((it, k) => it === this.items[k])) {
+      this.items = items;
+      return this.refresh();
+    }
     const anchor = keepScroll ? this.anchor() : null;
     this.items = items;
+    if (this.focusIndex >= items.length) this.focusIndex = items.length - 1;
     this.tiles.forEach(t => this.release(t));
     this.tiles.clear();
     this.layout();
@@ -110,9 +124,9 @@ export class VGrid {
     s.transform = `translate(${c * (this.cell + g)}px, ${r * this.rowH}px)`;
   }
 
-  make(i) {
+  make(i, reuse) {
     const it = this.items[i];
-    let t = this.pool.pop();
+    let t = reuse || this.pool.pop();
     if (!t) {
       t = document.createElement('div');
       t.className = 'tile';
@@ -120,9 +134,20 @@ export class VGrid {
       t.firstChild.decoding = 'async';
       t.firstChild.draggable = false;
       t.firstChild.onload = e => e.target.classList.add('ok');
-      t.firstChild.onerror = e => e.target.classList.remove('ok');
+      // a fila de miniaturas pode recusar (503) quando está cheia: tenta de novo uma vez, um pouco depois
+      t.firstChild.onerror = e => {
+        const img = e.target, src = img.getAttribute('src');
+        img.classList.remove('ok');
+        if (!src || img.dataset.retry === src) return;
+        img.dataset.retry = src;
+        setTimeout(() => { if (img.getAttribute('src') === src) img.src = src + (src.includes('?') ? '&' : '?') + 'r=1'; }, 1500);
+      };
     }
     t.dataset.i = i;
+    t.id = 'vg-' + i;
+    t.setAttribute('role', 'option');
+    t.setAttribute('aria-label', `${it.video ? 'Vídeo' : 'Foto'}, ${fmt.day(new Date(it.t))}`);
+    t.classList.toggle('focus', i === this.focusIndex);
     this.place(t, i);
     const img = t.firstChild;
     const src = thumbUrl(it, this.px, editV(it), !this.aspect);
@@ -131,8 +156,9 @@ export class VGrid {
       img.src = src;
     }
     while (t.childNodes.length > 1) t.lastChild.remove();
-    if (it.video) t.append(Object.assign(document.createElement('div'), { className: 'badge', textContent: fmt.dur(it.dur) }));
-    else if (this.badge) {
+    if (it.video) t.append(Object.assign(document.createElement('div'), { className: 'badge', textContent: fmt.dur(S.data.edits[it.id]?.trim ? S.data.edits[it.id].trim[1] - S.data.edits[it.id].trim[0] : it.dur) }));
+    // os dias restantes (Apagados) ficam numa faixa própria embaixo: valem para vídeo também
+    if (this.badge) {
       const b = this.badge(it);
       if (b) t.append(Object.assign(document.createElement('div'), { className: 'days', textContent: b }));
     }
@@ -151,8 +177,10 @@ export class VGrid {
     const chk = document.createElement('div');
     chk.className = 'chk';
     t.append(chk);
-    t.classList.toggle('sel', !!this.selection?.has(it.id));
-    this.host.append(t);
+    const sel = !!this.selection?.has(it.id);
+    t.classList.toggle('sel', sel);
+    t.setAttribute('aria-selected', String(sel));
+    if (!reuse) this.host.append(t);
     return t;
   }
 
@@ -162,16 +190,24 @@ export class VGrid {
     this.pool.push(t);
   }
 
+  /** redesenha selos (favorito, editado, dias) reaproveitando cada tile no mesmo lugar */
   refresh() {
     for (const [i, t] of this.tiles) {
-      this.release(t);
-      this.tiles.delete(i);
+      if (i < this.items.length) this.make(i, t);
+      else {
+        this.release(t);
+        this.tiles.delete(i);
+      }
     }
     this.render();
   }
 
   syncSelection() {
-    for (const [i, t] of this.tiles) t.classList.toggle('sel', !!this.selection?.has(this.items[i].id));
+    for (const [i, t] of this.tiles) {
+      const sel = !!this.selection?.has(this.items[i].id);
+      t.classList.toggle('sel', sel);
+      t.setAttribute('aria-selected', String(sel));
+    }
   }
 
   indexAtPoint(x, y) {
@@ -220,26 +256,79 @@ export class VGrid {
     this.render();
   }
 
+  // ---------- teclado: setas movem o foco, Enter/Espaço abrem (ou marcam, no modo de seleção) ----------
+  setFocus(i) {
+    if (!this.items.length) return;
+    i = Math.max(0, Math.min(this.items.length - 1, i));
+    this.tiles.get(this.focusIndex)?.classList.remove('focus');
+    this.focusIndex = i;
+    this.scrollToIndex(i, 'nearest');
+    this.tiles.get(i)?.classList.add('focus');
+    this.host.setAttribute('aria-activedescendant', 'vg-' + i);
+  }
+
+  /** primeiro quadrado inteiro à vista (por baixo da barra superior) */
+  firstVisible() {
+    const top = this.scroller.scrollTop - this.offset() + 70;
+    return Math.min(this.items.length - 1, Math.max(0, Math.ceil(top / this.rowH)) * this.cols);
+  }
+
+  onKey(e) {
+    if (e.altKey || e.ctrlKey || e.metaKey || !this.items.length) return;
+    const k = e.key, i = this.focusIndex < 0 ? this.firstVisible() : this.focusIndex;
+    const perPage = Math.max(1, Math.floor(this.scroller.clientHeight / this.rowH) - 1) * this.cols;
+    const moves = {
+      ArrowRight: i + 1, ArrowLeft: i - 1, ArrowDown: i + this.cols, ArrowUp: i - this.cols,
+      Home: 0, End: this.items.length - 1, PageDown: i + perPage, PageUp: i - perPage,
+    };
+    if (k in moves) {
+      e.preventDefault();
+      // a primeira seta só mostra onde o foco está
+      this.setFocus(this.focusIndex < 0 ? i : moves[k]);
+    } else if ((k === 'Enter' || k === ' ') && this.focusIndex >= 0) {
+      e.preventDefault();
+      const it = this.items[this.focusIndex];
+      if (this.selecting() || k === ' ' && e.shiftKey) {
+        this.selection.has(it.id) ? this.selection.delete(it.id) : this.selection.add(it.id);
+        this.lastClick = it.id;
+        this.syncSelection();
+        this.onSel(true);
+      } else {
+        this.lastClick = it.id;
+        this.onOpen(it, this.focusIndex, this.items);
+      }
+    }
+  }
+
   // ---------- cliques, menu de contexto e seleção arrastando ----------
   bind() {
     const host = this.host;
     let drag = null;
+    host.addEventListener('keydown', e => this.onKey(e));
+    // com o mouse, o anel some (o clique também foca a grade, mas o anel é só do teclado)
+    host.addEventListener('pointerdown', () => {
+      this.tiles.get(this.focusIndex)?.classList.remove('focus');
+      this.focusIndex = -1;
+      host.removeAttribute('aria-activedescendant');
+    });
     host.addEventListener('click', e => {
       const t = e.target.closest('.tile');
       if (!t || this.dragged) return;
       const i = +t.dataset.i, it = this.items[i];
       if (this.selecting() || e.ctrlKey || e.metaKey || e.shiftKey) {
-        if (e.shiftKey && this.lastClick != null) {
-          const [a, b] = [Math.min(this.lastClick, i), Math.max(this.lastClick, i)];
+        // o último clique é guardado pelo id: se a lista mudou (ocultar, apagar), o índice antigo não vale mais
+        const last = this.lastClick != null ? this.items.findIndex(x => x.id === this.lastClick) : -1;
+        if (e.shiftKey && last >= 0) {
+          const [a, b] = [Math.min(last, i), Math.max(last, i)];
           for (let k = a; k <= b; k++) this.selection.add(this.items[k].id);
         } else if (this.selection.has(it.id)) this.selection.delete(it.id);
         else this.selection.add(it.id);
-        this.lastClick = i;
+        this.lastClick = it.id;
         this.syncSelection();
         this.onSel(true);
         return;
       }
-      this.lastClick = i;
+      this.lastClick = it.id;
       this.onOpen(it, i, this.items);
     });
     host.addEventListener('contextmenu', e => {
@@ -292,8 +381,18 @@ export class VGrid {
       if (drag && this.dragged) setTimeout(() => (this.dragged = false), 0);
       drag = null;
     };
+    // pointercancel/blur: se o pointerup se perder (Alt+Tab, alerta do sistema), o arrasto não fica preso
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    window.addEventListener('blur', up);
+    this.unbind = () => {
+      drag = null;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      window.removeEventListener('blur', up);
+    };
   }
 
   applyDrag(d) {

@@ -4,3 +4,4 @@ src-tauri/gen/
 *.exe
 .DS_Store
 tools/*.log
+docs/qa/capturas/

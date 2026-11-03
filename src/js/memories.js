@@ -5,10 +5,13 @@ import { h, icon } from './util.js';
 import { S, save, editV } from './store.js';
 
 const DUR = 4600;
+const REDUCE = matchMedia('(prefers-reduced-motion: reduce)');
 
 export function playMemory(m) {
   const items = (m.items || []).filter(Boolean);
   if (!items.length) return;
+  // um vídeo tocando no visualizador por baixo misturava o som com a trilha
+  document.querySelectorAll('video').forEach(v => v.pause());
   const el = h('div.memory');
   const stage = h('div.m-stage');
   const segs = h('div.m-segs', items.length <= 48 ? items.map(() => h('div.seg', h('i'))) : h('div.seg.one', h('i')));
@@ -23,8 +26,9 @@ export function playMemory(m) {
     h('button.m-tap.l', { onclick: () => go(i - 1) }), h('button.m-tap.r', { onclick: () => go(i + 1) }));
   document.body.append(el);
 
-  let i = -1, paused = false, timer = 0, t0 = 0, elapsed = 0, idle;
-  const music = S.data.settings.memMusic === false ? null : startMusic();
+  let i = -1, paused = false, closed = false, timer = 0, t0 = 0, elapsed = 0, idle;
+  // uma referência só: a música ligada no meio também precisa obedecer ao Pausar
+  let music = S.data.settings.memMusic === false ? null : startMusic();
 
   const preload = k => { const it = items[k]; if (it) new Image().src = thumbUrl(it, 1600, editV(it)); };
 
@@ -38,11 +42,14 @@ export function playMemory(m) {
     const zoomIn = Math.random() > 0.4;
     const a = `scale(${zoomIn ? z0 : z1}) translate(${r() * 2.5}%, ${r() * 2.5}%)`;
     const b = `scale(${zoomIn ? z1 : z0}) translate(${r() * 2.5}%, ${r() * 2.5}%)`;
-    img.animate([{ transform: a }, { transform: b }], { duration: DUR + 1400, easing: 'linear', fill: 'forwards' });
+    // com "Reduzir Movimento", como no iOS: sem zoom/pan, só a dissolução entre as fotos
+    // (a regra global do CSS não alcança a Web Animations API)
+    if (!REDUCE.matches) img.animate([{ transform: a }, { transform: b }], { duration: DUR + 1400, easing: 'linear', fill: 'forwards' });
     return s;
   }
 
   function go(k) {
+    if (closed) return;
     if (k < 0) k = 0;
     if (k >= items.length) return close();
     i = k;
@@ -67,7 +74,7 @@ export function playMemory(m) {
 
   function run() {
     clearTimeout(timer);
-    if (paused) return;
+    if (paused || closed) return;
     t0 = performance.now();
     const left = DUR - elapsed;
     timer = setTimeout(() => go(i + 1), left);
@@ -86,6 +93,7 @@ export function playMemory(m) {
   }
 
   function toggle() {
+    if (closed) return;
     paused = !paused;
     playBtn.replaceChildren(icon(paused ? 'play' : 'pause'));
     el.classList.toggle('paused', paused);
@@ -107,14 +115,23 @@ export function playMemory(m) {
     S.data.settings.memMusic = on;
     save();
     muteBtn.replaceChildren(icon(on ? 'speaker' : 'mute'));
-    if (on) { music2 = music2 || startMusic(); music2.resume(); } else { music?.stop(); music2?.stop(); music2 = null; }
+    if (on) {
+      music ||= startMusic();
+      if (paused) music?.pause(); else music?.resume();
+    } else {
+      music?.stop();
+      music = null;
+    }
   }
-  let music2 = null;
 
+  // fechar duas vezes (ou durante o fade) chamava stop() de novo e dava erro no AudioContext
   function close() {
+    if (closed) return;
+    closed = true;
     clearTimeout(timer);
+    clearTimeout(idle);
     music?.stop();
-    music2?.stop();
+    music = null;
     document.removeEventListener('keydown', key, true);
     el.classList.add('out');
     setTimeout(() => el.remove(), 450);
@@ -194,15 +211,17 @@ function startMusic() {
       setTimeout(tick, 400);
     };
     tick();
+    // o contexto pode já estar fechado (música desligada) ou ainda suspenso: nada de promessa rejeitada solta
     return {
-      pause: () => ctx.suspend(),
-      resume: () => ctx.resume(),
+      pause: () => { if (ctx.state === 'running') ctx.suspend().catch(() => {}); },
+      resume: () => { if (ctx.state === 'suspended') ctx.resume().catch(() => {}); },
       stop: () => {
+        if (stopped) return;
         stopped = true;
         master.gain.cancelScheduledValues(ctx.currentTime);
         master.gain.setValueAtTime(master.gain.value, ctx.currentTime);
         master.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
-        setTimeout(() => ctx.close(), 700);
+        setTimeout(() => { if (ctx.state !== 'closed') ctx.close().catch(() => {}); }, 700);
       },
     };
   } catch {

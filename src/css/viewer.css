@@ -1,10 +1,13 @@
 /* ============ visualizador ============ */
 .viewer { position: fixed; inset: 0; z-index: 100; --bgop: 1; color: var(--label); }
+/* largura do painel de Informações: as barras e as setas abrem espaço a partir dela (viewer.js lê o mesmo valor) */
+:root { --info-w: 360px; }
 .viewer .v-bg { position: absolute; inset: 0; background: var(--bg); opacity: var(--bgop); transition: background .35s, opacity .35s; }
 .viewer.opening .v-bg { opacity: 0; }
 .viewer.closing .v-bg { opacity: 0 !important; transition: opacity .4s; }
 .viewer.dragging .v-bg { transition: none; }
 .viewer.immersive .v-bg { background: #000; }
+.viewer:focus { outline: none; }
 .v-stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; }
 .v-slide { position: absolute; inset: 0; }
 .v-slide .media { position: absolute; transform-origin: center; }
@@ -26,11 +29,11 @@
 .v-title b { font: 650 16px/1.2 var(--font); }
 .v-title span { font-size: 12.5px; color: var(--label-2); }
 .v-top .pill .gbtn:first-child:not(.round) { padding-left: 8px; }
-.with-info .v-top { right: 394px; }
+.with-info .v-top { right: calc(var(--info-w) + 34px); }
 
 .v-bottom { position: absolute; z-index: 5; left: 0; right: 0; bottom: 14px; display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: none; }
 .v-bottom > * { pointer-events: auto; }
-.with-info .v-bottom { right: 380px; }
+.with-info .v-bottom { right: calc(var(--info-w) + 20px); }
 .v-stripwrap { width: min(560px, calc(100% - 40px)); height: 50px; border-radius: 16px; overflow: hidden; padding: 5px 0; --g-tint: color-mix(in srgb, var(--g-tint) 60%, transparent); }
 .v-strip { display: flex; gap: 2px; height: 40px; transition: transform .45s var(--ease); will-change: transform; }
 .v-strip .st { flex: none; width: 26px; height: 40px; overflow: hidden; border-radius: 3px; transition: width .4s var(--spring), margin .4s var(--spring); }
@@ -44,14 +47,19 @@
 .gbtn.on .ic { color: var(--accent); }
 .gbtn.beat .ic { animation: beat .55s var(--spring); color: var(--red); }
 .v-actions .gbtn.on .ic[class] { color: inherit; }
+/* o realce .on acima é anulado de propósito; o painel aberto ganha um fundo, para o botão mostrar o estado */
+.v-actions .gbtn[aria-pressed="true"]:not(.beat) { background: var(--fill-2); }
+.v-actions .gbtn:disabled { opacity: .4; }
 @keyframes beat { 0% { transform: scale(1); } 35% { transform: scale(1.4); } 100% { transform: scale(1); } }
 
 .v-nav { position: absolute; z-index: 4; top: 50%; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; translate: 0 -50%; opacity: 0; }
 .viewer:hover .v-nav { opacity: 1; }
 .viewer.immersive:hover .v-nav { opacity: 0; }
+/* pelo Tab as setas precisam aparecer, mesmo sem o mouse em cima */
+.viewer .v-nav:focus-visible { opacity: 1; }
 .v-nav.prev { left: 18px; }
 .v-nav.next { right: 18px; }
-.with-info .v-nav.next { right: 398px; }
+.with-info .v-nav.next { right: calc(var(--info-w) + 38px); }
 .v-nav:active { transform: scale(.9); }
 
 /* controles de vídeo */
@@ -70,12 +78,17 @@
 
 /* painel de informações */
 .v-info {
-  position: absolute; z-index: 6; top: 10px; right: 10px; bottom: 10px; width: 360px; border-radius: 28px;
+  position: absolute; z-index: 6; top: 10px; right: 10px; bottom: 10px; width: var(--info-w); border-radius: 28px;
   padding: 16px; overflow-y: auto; transform: translateX(calc(100% + 24px)); opacity: 0;
   transition: transform .55s var(--spring), opacity .3s;
   --g-tint: var(--g-tint-strong); --blur: 30px;
 }
 .with-info .v-info { transform: none; opacity: 1; }
+/* no modo imersivo (fundo preto) o vidro claro virava um cinza opaco com texto apagado: o painel usa as cores do escuro */
+.viewer.immersive .v-info {
+  --g-tint-strong: rgba(36, 36, 40, .72); --g-text: #fff; --g-hi: rgba(255, 255, 255, .42); --g-lo: rgba(255, 255, 255, .1); --g-edge: rgba(255, 255, 255, .05);
+  --label: #fff; --label-2: rgba(235, 235, 245, .62); --sep: rgba(84, 84, 88, .55); --fill: rgba(118, 118, 128, .24); --fill-2: rgba(118, 118, 128, .36);
+}
 .i-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .i-head b { display: block; font: 700 19px var(--font-d); letter-spacing: -.01em; }
 .i-head span { font-size: 13.5px; color: var(--label-2); }
@@ -100,6 +113,18 @@
 .i-file { font-size: 14px; font-weight: 600; word-break: break-all; }
 .i-path { font-size: 12.5px; color: var(--accent); text-align: left; word-break: break-all; margin-top: 2px; }
 .i-path:hover { text-decoration: underline; }
+
+/* janela estreita: o painel vira uma folha que sobe por cima da foto, em vez de empurrá-la
+   (com 420 px sobrava uma foto de 40 px). O limite é o mesmo de sheetMode() no viewer.js. */
+@media (max-width: 759px) {
+  .v-info { top: auto; left: 10px; right: 10px; width: auto; max-height: min(62vh, 560px); transform: translateY(calc(100% + 24px)); }
+  .with-info .v-top { right: 14px; }
+  html.win-frameless .with-info .v-top { right: calc(var(--winctl-w) + 10px); }
+  /* folha embaixo também na janela sem moldura (o top: 64px do app.css a puxava para cima) */
+  html.win-frameless .v-info { top: auto; }
+  .with-info .v-bottom { right: 0; }
+  .with-info .v-nav.next { right: 18px; }
+}
 
 /* ============ editor ============ */
 .editor {
@@ -207,3 +232,22 @@
 .memory.ui .m-ctl, .memory.paused .m-ctl { opacity: 1; transform: none; }
 .m-tap { position: absolute; z-index: 2; top: 0; bottom: 0; width: 30%; }
 .m-tap.l { left: 0; } .m-tap.r { right: 0; }
+
+/* ============ editor de vídeo: aba Vídeo (aparar) e exportação ============ */
+.vt-row { display: flex; align-items: center; gap: 12px; width: min(760px, 94%); }
+.vt-strip { position: relative; flex: 1; height: 54px; border-radius: 9px; overflow: hidden; background: #1c1c1e; touch-action: none; cursor: ew-resize; }
+.vt-frames { position: absolute; inset: 0; display: flex; }
+.vt-frames img { flex: 1; min-width: 0; height: 100%; object-fit: cover; }
+.vt-dim { position: absolute; top: 0; bottom: 0; background: rgba(0, 0, 0, .62); pointer-events: none; }
+.vt-sel { position: absolute; top: 0; bottom: 0; box-sizing: border-box; border: 3px solid var(--edit-y); border-left-width: 14px; border-right-width: 14px; border-radius: 9px; pointer-events: none; }
+.vt-h { position: absolute; top: -3px; bottom: -3px; width: 26px; pointer-events: auto; cursor: ew-resize; }
+.vt-h[data-k="a"] { left: -20px; }
+.vt-h[data-k="b"] { right: -20px; }
+.vt-h::after { content: ""; position: absolute; top: 50%; left: 50%; width: 3px; height: 16px; translate: -50% -50%; border-radius: 2px; background: rgba(0, 0, 0, .55); }
+.vt-head { position: absolute; top: -3px; bottom: -3px; width: 3px; margin-left: -1.5px; border-radius: 2px; background: #fff; box-shadow: 0 0 4px rgba(0, 0, 0, .6); pointer-events: none; }
+.vt-info { font: 600 12px var(--font); color: var(--label-2); font-variant-numeric: tabular-nums; }
+.e-export { position: absolute; z-index: 5; left: 50%; top: 50%; translate: -50% -50%; width: 340px; padding: 20px; border-radius: 26px; display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; --g-tint: rgba(28, 28, 32, .78); }
+.e-export b { font: 650 17px var(--font); }
+.e-export span { font-size: 13px; color: var(--label-2); }
+.e-exbar { width: 100%; height: 6px; border-radius: 6px; background: rgba(255, 255, 255, .15); overflow: hidden; }
+.e-exbar i { display: block; height: 100%; width: 0; background: var(--edit-y); border-radius: 6px; transition: width .2s; }
