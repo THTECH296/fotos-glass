@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Fotos",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "identifier": "br.com.fotos.app",
   "build": {
     "frontendDist": "../src"
@@ -12,7 +12,7 @@
       {
         "label": "main",
         "url": "index.html",
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required",
+        "create": false,
         "title": "Fotos",
         "width": 1320,
         "height": 860,

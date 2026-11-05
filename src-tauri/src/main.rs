@@ -1109,7 +1109,55 @@ async fn open_default_settings() {
     assoc::open_settings();
 }
 
+/// Cria a janela principal (no tauri.conf ela está com "create": false). Às vezes o WebView2 falha
+/// na criação ("identificador de janela inválido", 0x80070578) e, quando falha num processo, as novas
+/// tentativas no mesmo processo também falham — mas um processo novo costuma abrir. Então: tenta duas
+/// vezes aqui; se não der, abre o Fotos de novo com os mesmos argumentos (até 6 vezes) e sai na hora,
+/// liberando a instância única. Antes o app só fechava, e a foto aberta pelo Explorador não aparecia.
+fn criar_janela(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let mut conf = app.config().app.windows.iter().find(|w| w.label == "main").cloned().ok_or("janela main sumiu do tauri.conf")?;
+    if std::env::var_os("FOTOS_DIAG_SEM_TRANSP").is_some() {
+        conf.transparent = false;
+    }
+    let relance: u32 = std::env::var("FOTOS_RELANCE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let mut ultimo = String::new();
+    for tentativa in 0..2u64 {
+        if let Some(w) = app.get_webview_window("main") {
+            // uma tentativa anterior criou a janela mas não o WebView: começa do zero
+            let _ = w.destroy();
+        }
+        match tauri::WebviewWindowBuilder::from_config(app.handle(), &conf).and_then(|b| b.build()) {
+            Ok(_) => {
+                if tentativa > 0 || relance > 0 {
+                    log_err(format!("janela criada (tentativa {}, reabertura {relance})", tentativa + 1));
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                ultimo = e.to_string();
+                log_err(format!("criar janela, tentativa {} (reabertura {relance}): {ultimo}", tentativa + 1));
+                std::thread::sleep(Duration::from_millis(400));
+            }
+        }
+    }
+    if relance < 6 {
+        if let Ok(exe) = std::env::current_exe() {
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            if std::process::Command::new(exe).args(&args).env("FOTOS_RELANCE", (relance + 1).to_string()).spawn().is_ok() {
+                // sai já: o processo novo espera um pouco e pega a instância única
+                encerrar_agora();
+            }
+        }
+    }
+    Err(format!("não foi possível criar a janela: {ultimo}").into())
+}
+
 fn main() {
+    // reaberto por criar_janela: dá tempo de o processo anterior sair e soltar a instância única
+    // (pausa crescente: a falha do WebView2 costuma passar sozinha depois de alguns segundos)
+    if let Some(n) = std::env::var("FOTOS_RELANCE").ok().and_then(|v| v.parse::<u64>().ok()) {
+        std::thread::sleep(Duration::from_millis(600 * n.min(6)));
+    }
     // pânico vai para o erros.log (sem console em release) e segue o tratamento padrão
     let padrao = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -1147,10 +1195,13 @@ fn main() {
                 fs::create_dir_all(p)?;
             }
             let _ = DIRS.set(d);
+            criar_janela(app)?;
             // mantém o registro de "app de fotos e vídeos" apontando para este .exe (só o instalado)
-            std::thread::spawn(|| {
-                let _ = assoc::register();
-            });
+            if std::env::var_os("FOTOS_DIAG_SEM_ASSOC").is_none() {
+                std::thread::spawn(|| {
+                    let _ = assoc::register();
+                });
+            }
             // limpeza do cache depois que a abertura assentou
             std::thread::spawn(|| {
                 std::thread::sleep(Duration::from_secs(20));
